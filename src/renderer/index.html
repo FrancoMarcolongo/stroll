@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:">
+  <title>Stroll</title>
+  <link rel="stylesheet" href="../../node_modules/@xterm/xterm/css/xterm.css">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div id="app">
+    <aside id="sidebar">
+      <div class="drag-strip brand-strip">
+        <span class="brand">
+          <svg viewBox="0 0 64 64" width="20" height="20" aria-hidden="true">
+            <rect width="64" height="64" rx="15" fill="#1d2433"/>
+            <path d="M17 50C17 40.3 47.5 42.7 47.1 32 46.6 21.7 16.9 24.1 17.9 14.1" fill="none" stroke="#d9a26b" stroke-width="5.5" stroke-linecap="round"/>
+            <circle cx="17" cy="50" r="5" fill="#3fb950" stroke="#1d2433" stroke-width="2"/>
+            <circle cx="47.1" cy="32" r="5" fill="#e3a008" stroke="#1d2433" stroke-width="2"/>
+            <circle cx="17.9" cy="14.1" r="5" fill="#58a6ff" stroke="#1d2433" stroke-width="2"/>
+          </svg>
+          Stroll
+        </span>
+        <button type="button" id="settings-btn" class="icon-btn" title="Settings (⌘,)"><span data-icon="settings"></span></button>
+      </div>
+      <nav class="nav">
+        <button type="button" id="home-btn" class="nav-item" title="Overview (⌘0)"><span class="nav-icon" data-icon="overview"></span><span>Overview</span><span class="nav-count" id="nav-needs"></span></button>
+      </nav>
+      <form id="quick-add" autocomplete="off">
+        <span class="qa-icon" data-icon="plus"></span>
+        <input id="quick-add-input" placeholder="Add a to-do" spellcheck="false">
+        <kbd>⌘K</kbd>
+      </form>
+      <div id="sidebar-scroll">
+        <section>
+          <header><span>To-dos</span><span class="count" id="todo-count"></span></header>
+          <ul class="list" id="todo-list"></ul>
+          <div id="multi-bar" hidden>
+            <span id="multi-count"></span>
+            <button class="btn sm primary" data-multi="start">Start together</button>
+            <button class="btn sm" data-multi="handoff">Hand off together</button>
+            <button class="btn sm ghost" data-multi="clear">Clear</button>
+          </div>
+          <details id="done-wrap"><summary>Done <span class="count" id="done-count"></span></summary><ul class="list" id="done-list"></ul></details>
+        </section>
+        <section>
+          <header><span>Sessions</span><button id="new-session-btn" class="icon-btn" title="New session (⌘N)"><span data-icon="plus"></span></button></header>
+          <ul class="list" id="session-list"></ul>
+        </section>
+        <section>
+          <header><span>Background</span><span class="count" id="run-count"></span></header>
+          <ul class="list" id="run-list"></ul>
+        </section>
+        <section>
+          <details id="recent-wrap"><summary>Elsewhere <span class="hint">started outside Stroll</span></summary><ul class="list" id="recent-list"></ul></details>
+        </section>
+      </div>
+    </aside>
+    <main id="main">
+      <div id="view-header" class="drag-strip"></div>
+      <div id="banner" hidden></div>
+      <div id="view-body">
+        <div id="terminals"></div>
+        <div id="panel"></div>
+      </div>
+    </main>
+  </div>
+  <div id="modal-root"></div>
+  <script src="../../node_modules/@xterm/xterm/lib/xterm.js"></script>
+  <script src="../../node_modules/@xterm/addon-fit/lib/addon-fit.js"></script>
+  <script src="../../node_modules/@xterm/addon-web-links/lib/addon-web-links.js"></script>
+  <script src="../../node_modules/@xterm/addon-unicode11/lib/addon-unicode11.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

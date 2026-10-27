@@ -1,0 +1,19 @@
+#!/bin/zsh
+# Launch Stroll from source (a packaged, unsigned .app would be blocked by Gatekeeper).
+#   stroll          start Stroll (or bring the running one to the front)
+#   stroll update   pull the latest version and reinstall dependencies
+DIR=${0:A:h:h}
+DATA=${STROLL_HOME:-$HOME/.stroll}
+
+if [[ "$1" == "update" ]]; then
+  git -C "$DIR" pull --ff-only && (cd "$DIR" && npm install --no-audit --no-fund) \
+    && echo "Updated. Quit and reopen Stroll to use the new version."
+  exit $?
+fi
+
+mkdir -p "$DATA" && chmod 700 "$DATA"
+LOG="$DATA/stroll.log"
+# Keep the log from growing forever.
+if [[ -f "$LOG" && $(stat -f%z "$LOG") -gt 5000000 ]]; then mv -f "$LOG" "$LOG.1"; fi
+nohup "$DIR/node_modules/.bin/electron" "$DIR" >> "$LOG" 2>&1 &
+disown
