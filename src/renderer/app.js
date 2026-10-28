@@ -286,7 +286,7 @@ function ensureTerm(id) {
     // Claude Code sends no hook when a turn is interrupted; tell Stroll so the dot settles.
     if (ev.key === 'Escape') api.send('session:interrupt', id);
     // Shift+Enter → newline in Claude Code's prompt (same sequence /terminal-setup configures).
-    if (ev.key === 'Enter' && ev.shiftKey && !ev.metaKey && !ev.ctrlKey && !ev.altKey) { api.send('session:write', id, '\x1b\r'); return false; }
+    if (ev.key === 'Enter' && ev.shiftKey && !ev.metaKey && !ev.ctrlKey && !ev.altKey) { ev.preventDefault(); api.send('session:write', id, '\x1b\r'); return false; }
     if (ev.metaKey && ev.key === 'c' && term.hasSelection()) { navigator.clipboard.writeText(term.getSelection()); return false; }
     return !ev.metaKey; // ⌘ shortcuts belong to the app and the menu (⌘V paste still reaches the terminal)
   });
