@@ -217,13 +217,13 @@ details[open] > summary::before { transform: rotate(90deg); }
 
 /* modal */
 #modal-root .backdrop { position: fixed; inset: 0; background: rgba(5, 7, 10, 0.6); backdrop-filter: blur(3px); display: grid; place-items: start center; padding-top: 12vh; z-index: 50; animation: fade 0.12s ease-out; }
-.modal { width: 560px; max-width: 92vw; background: var(--bg-side); border: 1px solid var(--line); border-radius: 14px; padding: 20px 22px 18px; display: grid; gap: 14px; box-shadow: var(--shadow); animation: rise 0.14s ease-out; }
+.modal { width: 560px; max-width: 92vw; background: var(--bg-side); border: 1px solid var(--line); border-radius: 14px; padding: 20px 22px 18px; display: grid; grid-template-columns: minmax(0, 1fr); gap: 14px; box-shadow: var(--shadow); animation: rise 0.14s ease-out; }
 .modal h2 { margin: 0; font-size: 15.5px; font-weight: 650; }
 .modal .sub { color: var(--text-3); font-size: 12.5px; margin-top: -8px; line-height: 1.5; }
 .dir-chips { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 7px; }
 .modal footer { display: flex; justify-content: flex-end; gap: 8px; margin-top: 2px; }
 .pick-list { max-height: 320px; overflow-y: auto; }
-.confirm-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.confirm-list { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: minmax(0, 1fr); gap: 6px; }
 .confirm-list li { display: flex; align-items: center; gap: 9px; padding: 8px 10px; border-radius: var(--radius); background: var(--bg-raised); border: 1px solid var(--line-soft); }
 .confirm-list .main { min-width: 0; flex: 1; }
 .confirm-list .title { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }

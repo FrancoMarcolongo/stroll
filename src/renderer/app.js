@@ -795,7 +795,7 @@ function setTodoDone(id, done) {
   modal(`
     <h2>Mark “${esc(t.title)}” done?</h2>
     <div class="sub">${many ? `${live.length} sessions are` : 'A session is'} still open for this to-do. End ${many ? 'them' : 'it'} too? You can resume ${many ? 'them' : 'it'} later from Closed.</div>
-    <ul class="confirm-list">${live.map(s => `<li>${dotHtml(sessionDot(s))}<div class="main"><div class="title">${esc(s.title || 'Untitled session')}</div><div class="sub">${esc(s.preview || STATE_TITLE[sessionState(s)] || '')}</div></div></li>`).join('')}</ul>
+    <ul class="confirm-list">${live.map(s => `<li>${sessionDot(s) === 'none' ? '' : dotHtml(sessionDot(s))}<div class="main"><div class="title">${esc(s.title || 'Untitled session')}</div><div class="sub">${esc(s.preview || STATE_TITLE[sessionState(s)] || '')}</div></div></li>`).join('')}</ul>
     <footer>
       <button class="btn ghost" data-close>Cancel</button>
       <button class="btn" data-keep>${ICON.check}Done, keep open</button>
