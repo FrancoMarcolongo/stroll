@@ -90,11 +90,14 @@ function sessionDot(s) {
   return 'none';
 }
 function runDot(r) {
+  if (r.pendingApproval) return 'waiting';
   if (r.status === 'running') return 'working';
   if (!r.unseen) return 'none';
   return r.status === 'ready' ? 'idle' : 'waiting';
 }
 const dotHtml = dot => `<span class="dot ${dot}"${DOT_LABEL[dot] ? ` title="${DOT_LABEL[dot]}"` : ''}></span>`;
+
+const plainText = md => md.replace(/^#{1,4} /gm, '').replace(/\*\*|`/g, '').replace(/\s+/g, ' ').trim();
 
 function lightMarkdown(text) {
   return esc(text)
@@ -203,6 +206,7 @@ function todoState(t) {
     return { tone, label: tone === 'waiting' ? 'Needs you' : 'In progress', title: `${live.length} live session${live.length === 1 ? '' : 's'}` };
   }
   const runs = t.runIds.map(run).filter(Boolean);
+  if (runs.some(r => r.pendingApproval)) return { tone: 'waiting', label: 'Needs you', title: 'A background run is waiting for your OK' };
   if (runs.some(r => r.status === 'running')) return { tone: 'working', label: 'Handed off', title: 'Background run in progress' };
   if (runs.some(r => r.unseen && r.status === 'ready')) return { tone: 'idle', label: 'Ready', title: 'Background run finished' };
   return null;
@@ -235,7 +239,9 @@ function sessionRow(s) {
 
 function runRow(r) {
   const isActive = S.view.type === 'run' && S.view.id === r.id;
-  const preview = r.status === 'running' ? (r.lastActivity || 'Starting…') : `${RUN_LABEL[r.status] || r.status}${r.result ? ` · ${r.result.replace(/\s+/g, ' ').slice(0, 120)}` : ''}`;
+  const preview = r.pendingApproval ? `Needs your OK: ${r.pendingApproval.detail}`
+    : r.status === 'running' ? (r.lastActivity || 'Starting…')
+      : `${RUN_LABEL[r.status] || r.status}${r.result ? ` · ${plainText(r.result).slice(0, 120)}` : ''}`;
   return `<li class="row ${isActive ? 'active' : ''} ${r.status === 'reviewed' ? 'dim' : ''}" data-kind="run" data-id="${esc(r.id)}">
     ${dotHtml(runDot(r))}
     <div class="main"><div class="title-line"><span class="title">${esc(r.title)}</span><span class="when">${ago(r.finishedAt || r.startedAt)}</span></div>
@@ -462,6 +468,7 @@ async function renderRun(header, panel) {
   updateRunMeta();
   panel.innerHTML = `<div class="run-view">
     <details class="run-prompt-wrap"><summary>Prompt</summary><div class="run-prompt">${esc(r.prompt)}</div></details>
+    <div id="run-approval"></div>
     <div class="events" id="run-events"></div>
     <div id="run-result"></div>
   </div>`;
@@ -469,6 +476,7 @@ async function renderRun(header, panel) {
   if (S.view.type !== 'run' || S.view.id !== r.id) return;
   // The final assistant message is the result; show it once, in the result card.
   const resultText = (run(r.id)?.result || '').trim();
+  renderRunApproval();
   $('#run-events').innerHTML = events.filter(e => e.kind !== 'result' && !(e.kind === 'text' && resultText && e.text.trim() === resultText)).map(eventHtml).join('');
   renderRunResult();
   panel.scrollTop = panel.scrollHeight;
@@ -484,11 +492,34 @@ function updateRunMeta() {
   meta.textContent = bits.join(' · ');
 }
 
+function renderRunApproval() {
+  const r = run(S.view.id);
+  const box = $('#run-approval');
+  if (!r || !box) return;
+  const a = r.pendingApproval;
+  if ((box.dataset.id || '') === (a?.id || '')) return;
+  box.dataset.id = a?.id || '';
+  if (!a) { box.innerHTML = ''; return; }
+  box.innerHTML = `<div class="approval">
+    <div class="ap-head">${ICON.alert}<b>This run needs your OK</b><span class="h-meta">${esc(a.summary)} · asked ${agoText(a.requestedAt)}</span></div>
+    <pre class="ap-detail">${esc(a.detail)}</pre>
+    ${a.rule
+    ? `<label class="ap-rule"><span>"Always allow" adds this rule for future runs</span><input type="text" id="ap-rule" value="${esc(a.rule)}" spellcheck="false"></label>`
+    : '<p class="help">Commands with pipes, loops or variables can only be allowed once.</p>'}
+    <div class="actions">
+      <button class="btn primary" data-act="ap-allow">${ICON.check}Allow once</button>
+      ${a.rule ? `<button class="btn" data-act="ap-always">${ICON.read}Always allow</button>` : ''}
+      <button class="btn danger" data-act="ap-deny">Deny</button>
+      <span class="help">No answer in 15 minutes counts as Deny.</span>
+    </div>
+  </div>`;
+}
+
 function renderRunResult() {
   const r = run(S.view.id);
   const box = $('#run-result');
   if (!r || !box) return;
-  if (r.status === 'running') { box.innerHTML = `<div class="h-meta">Working… ${esc(r.lastActivity || '')}</div>`; return; }
+  if (r.status === 'running') { box.innerHTML = `<div class="h-meta">${r.pendingApproval ? 'Paused until you answer above.' : `Working… ${esc(r.lastActivity || '')}`}</div>`; return; }
   const failed = r.status === 'failed' || r.status === 'interrupted' || r.status === 'cancelled';
   const body = r.result || r.error || (r.status === 'interrupted' ? 'Stroll was closed while this run was going.' : 'No result.');
   box.innerHTML = `<div class="result ${failed ? 'failed' : ''}">
@@ -571,7 +602,7 @@ function renderHome(header, panel) {
     ...n.reminders.map(todoRow),
     ...n.yourTurn.map(sessionRow),
   ];
-  const progress = [...live.filter(s => s.status === 'working' || s.status === 'starting').map(sessionRow), ...d.runs.filter(r => r.status === 'running').map(runRow)];
+  const progress = [...live.filter(s => s.status === 'working' || s.status === 'starting').map(sessionRow), ...d.runs.filter(r => r.status === 'running' && !r.pendingApproval).map(runRow)];
   const open = d.todos.filter(t => t.status === 'open').sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
   // Built once per visit; later state pushes only patch the counts and lists.
   if (panel.dataset.view !== 'home') {
@@ -666,7 +697,7 @@ function handoffModal(todoIds) {
   const cwd = todos.find(t => t.cwd)?.cwd || S.data.recentDirs[0] || S.data.config.defaultCwd;
   modal(`
     <h2>Hand off to a background run</h2>
-    <div class="sub">${todos.map(t => esc(t.title)).join(' · ')}<br>Read-only: it investigates and drafts, never edits, pushes or sends. You'll get a notification when it's ready.</div>
+    <div class="sub">${todos.map(t => esc(t.title)).join(' · ')}<br>It investigates and drafts, never edits, pushes or sends, and asks you before anything else. You'll get a notification when it's ready or needs you.</div>
     <div class="field"><label>Instructions</label><textarea name="instructions" rows="5" placeholder="Optional. What should it look at, what should the draft be?"></textarea></div>
     ${dirField(cwd)}
     <footer><button class="btn ghost" data-close>Cancel</button><button class="btn primary" data-go>${ICON.handoff}Hand off <kbd>⌘↩</kbd></button></footer>
@@ -833,6 +864,14 @@ document.addEventListener('click', async e => {
         const n = await api.invoke('runs:clearFinished');
         if (S.view.type === 'run' && !run(S.view.id)) navigate({ type: 'home' });
         return flash(`Cleared ${n} finished run${n === 1 ? '' : 's'}`);
+      }
+      case 'ap-allow': case 'ap-always': case 'ap-deny': {
+        const a = run(S.view.id)?.pendingApproval;
+        if (!a) return undefined;
+        const decision = act === 'ap-deny' ? 'deny' : 'allow';
+        const rule = act === 'ap-always' ? ($('#ap-rule')?.value.trim() || a.rule) : null;
+        await api.invoke('run:decide', a.id, decision, rule);
+        return flash(act === 'ap-always' ? `Allowed, and saved “${rule}” for future runs` : decision === 'allow' ? 'Allowed once' : 'Denied');
       }
       case 'apply-update': return applyUpdate();
       case 'dismiss-update': S.update = null; return renderBanner();
@@ -1001,7 +1040,7 @@ api.on('state:changed', data => {
       updateRunMeta();
       const headerRunning = !!$('#view-header [data-act="cancel-run"]');
       if (headerRunning !== (r.status === 'running') || $('#view-header').dataset.status !== `${r.status}:${runDot(r)}`) renderMain();
-      else renderRunResult();
+      else { renderRunResult(); renderRunApproval(); }
     }
   }
 });
@@ -1083,6 +1122,9 @@ function renderSettings(header, panel) {
     <section class="set-group"><h3>Background runs</h3>
       ${toggle('set-connectors', c.background.includeConnectors, 'Let runs read Slack, Gmail and Google Drive', 'Read-only. Off by default: emails and messages are where an agent is most likely to meet planted instructions.')}
       <div class="field"><label>Model</label><input type="text" id="set-model" value="${esc(c.background.model || '')}" placeholder="Default (same as Claude Code)"></div>
+      <div class="field"><label>Also allow without asking</label>
+        <textarea id="set-extra-rules" rows="4" spellcheck="false" placeholder="One rule per line, e.g. Bash(python3 ~/scripts/read_tickets.py:*)">${esc((c.background.extraAllowedTools || []).join('\n'))}</textarea>
+        <p class="help">Claude Code permission rules. Anything a run wants that isn't allowed asks you first; edits, pushes, PRs and sending messages are never allowed.</p></div>
     </section>
     <section class="set-group"><h3>Updates</h3>
       ${toggle('set-updates', c.updates.check, 'Check for updates automatically', 'Stroll checks its git repository every few hours.')}
@@ -1107,6 +1149,7 @@ function renderSettings(header, panel) {
   bind('#set-n-runs', 'change', e => save({ notifications: { backgroundRuns: e.target.checked } }));
   bind('#set-connectors', 'change', e => save({ background: { includeConnectors: e.target.checked } }));
   bind('#set-model', 'change', e => save({ background: { model: e.target.value.trim() || null } }));
+  bind('#set-extra-rules', 'change', e => save({ background: { extraAllowedTools: e.target.value.split('\n').map(l => l.trim()).filter(Boolean) } }));
   bind('#set-updates', 'change', e => save({ updates: { check: e.target.checked } }));
   bind('[data-set="check-updates"]', 'click', async () => {
     S.update = await api.invoke('app:checkUpdates');
@@ -1156,6 +1199,8 @@ api.on('config:changed', cfg => {
   }
   fitVisible();
   renderBanner();
+  const rules = $('#set-extra-rules');
+  if (rules && document.activeElement !== rules) rules.value = (cfg.background.extraAllowedTools || []).join('\n');
 });
 
 $('#settings-btn').addEventListener('click', () => navigate({ type: 'settings' }));

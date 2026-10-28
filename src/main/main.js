@@ -11,6 +11,7 @@ const { paths, loadConfig, saveOverrides, mergeDeep } = require('./config');
 const { Store } = require('./store');
 const { Sessions } = require('./sessions');
 const { Runs } = require('./runs');
+const { Approvals } = require('./approvals');
 const { Server, writeHookSettings, writeMcpConfig } = require('./server');
 const { recentSessions } = require('./recent');
 
@@ -20,13 +21,14 @@ app.setName('Stroll');
 if (process.env.STROLL_HOME) app.setPath('userData', path.join(process.env.STROLL_HOME, 'electron-profile'));
 
 let win = null;
-let config; let store; let sessions; let runs; let server;
+let config; let store; let sessions; let runs; let server; let approvals;
 let focusView = null; // what the user is looking at: { type, id }
 let pendingNav = null; // a view to open once a (re)created window has loaded
 let updateInfo = null;
 let quitting = false;
 const shownNotifications = new Set(); // macOS drops click events of notifications that get garbage-collected
 const lastNotified = new Map();
+
 
 const handoffPrompt = (todos, instructions, cwd) => [
   todos.length === 1 ? `Work on this to-do from the user's list: ${todos[0].title}` : "Work on these to-dos from the user's list:",
@@ -73,7 +75,7 @@ function markSeen(view) {
 function updateBadge() {
   const s = store.state;
   const waiting = s.sessions.filter(x => x.live && (x.status === 'waiting' || (x.status === 'idle' && x.unseen))).length;
-  const ready = s.runs.filter(r => r.unseen && r.status !== 'running').length;
+  const ready = s.runs.filter(r => (r.unseen && r.status !== 'running') || r.pendingApproval).length;
   const total = waiting + ready;
   app.dock?.setBadge(total ? String(total) : '');
 }
@@ -107,7 +109,11 @@ function publicConfig() {
     defaultCwd: config.defaultCwd,
     terminal: config.terminal,
     notifications: config.notifications,
-    background: { model: config.background.model, includeConnectors: config.background.includeConnectors },
+    background: {
+      model: config.background.model,
+      includeConnectors: config.background.includeConnectors,
+      extraAllowedTools: config.background.extraAllowedTools || [],
+    },
     updates: config.updates,
     claudePath: config.claudePath,
     claudeMissing: !config.claudePath,
@@ -299,6 +305,7 @@ function registerIpc() {
     store.patchSession(id, read ? { unseen: false, ...(s.status === 'waiting' ? { status: 'idle' } : {}) } : { unseen: true });
   });
   handle('run:markRead', (id, read) => store.patchRun(id, { unseen: !read }));
+  handle('run:decide', (approvalId, decision, rule) => approvals.decide(approvalId, decision, rule));
   handle('session:clearRestorable', () => {
     for (const s of store.state.sessions) if (s.restorable) s.restorable = false;
     store.changed();
@@ -306,7 +313,10 @@ function registerIpc() {
   on('session:resize', (id, cols, rows) => sessions.resize(id, cols, rows));
 
   handle('run:events', id => runs.getEvents(id));
-  handle('run:cancel', id => runs.cancel(id));
+  handle('run:cancel', id => {
+    runs.cancel(id);
+    approvals.denyAllFor(id, 'The run was cancelled.');
+  });
   handle('run:reviewed', id => store.patchRun(id, { status: 'reviewed', unseen: false }));
   handle('run:forget', id => { store.forgetRuns([id]); runs.deleteFiles([id]); });
   handle('runs:clearFinished', () => {
@@ -348,6 +358,12 @@ async function boot() {
   server = new Server();
   sessions = new Sessions({ store, config, paths, server });
   runs = new Runs({ store, config, paths });
+  approvals = new Approvals({ store, config });
+  approvals.on('requested', (run, a) => {
+    if (isLookingAt('run', run.id)) return;
+    notify('A background run needs your OK', `${run.title}: ${a.detail.slice(0, 140)}`, { type: 'run', id: run.id }, { kind: 'needsYou' });
+  });
+  approvals.on('config', () => send('config:changed', publicConfig()));
   runs.deleteFiles(store.prune());
 
   await server.start({
@@ -362,10 +378,13 @@ async function boot() {
     listRuns: status => store.state.runs
       .filter(r => !status || r.status === status)
       .map(({ prompt, ...r }) => r),
+    requestApproval: body => approvals.request(body),
+    getApproval: id => approvals.get(id),
     listSessions: () => store.state.sessions.map(s => ({ id: s.id, title: s.title, cwd: s.cwd, live: s.live, status: s.status, preview: s.preview, todoIds: s.todoIds, lastActivityAt: s.lastActivityAt })),
   });
   writeHookSettings(paths.hookSettings);
   writeMcpConfig(paths.mcpConfig, { serverScript: paths.mcpServer, port: server.port, token: server.token });
+  writeMcpConfig(paths.mcpConfigRuns, { serverScript: paths.mcpServer, port: server.port, token: server.token, mode: 'runs' });
 
   let pendingState = null;
   store.on('change', () => {
@@ -384,6 +403,7 @@ async function boot() {
   });
   runs.on('event', (id, ev) => send('run:event', id, ev));
   runs.on('finished', id => {
+    approvals.denyAllFor(id, 'The run ended.');
     const r = store.run(id);
     if (!r || r.status === 'cancelled' || isLookingAt('run', id)) return;
     store.patchRun(id, { unseen: true });

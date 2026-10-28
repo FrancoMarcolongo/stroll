@@ -26,13 +26,15 @@ function writeHookSettings(file) {
   writePrivate(file, JSON.stringify({ hooks }, null, 2));
 }
 
-function writeMcpConfig(file, { serverScript, port, token }) {
+// Sessions get the to-do tools; background runs get only the permission prompt tool
+// (STROLL_MCP_MODE=runs), which Claude Code calls when a run needs approval.
+function writeMcpConfig(file, { serverScript, port, token, mode = 'sessions' }) {
   const config = {
     mcpServers: {
       stroll: {
         command: process.execPath,
         args: [serverScript],
-        env: { ELECTRON_RUN_AS_NODE: '1', STROLL_PORT: String(port), STROLL_TOKEN: token },
+        env: { ELECTRON_RUN_AS_NODE: '1', STROLL_PORT: String(port), STROLL_TOKEN: token, STROLL_MCP_MODE: mode },
       },
     },
   };
@@ -125,6 +127,11 @@ class Server {
         const t = h.updateTodo(id, await body());
         return t ? json(200, t) : json(404, { error: 'no such to-do' });
       }
+    }
+    if (parts[1] === 'approvals' && parts.length === 2 && req.method === 'POST') return json(200, h.requestApproval(await body()));
+    if (parts[1] === 'approvals' && parts.length === 3 && req.method === 'GET') {
+      const a = h.getApproval(parts[2]);
+      return a ? json(200, a) : json(404, { error: 'no such approval' });
     }
     if (parts[1] === 'runs' && req.method === 'GET') return json(200, h.listRuns(url.searchParams.get('status')));
     if (parts[1] === 'sessions' && req.method === 'GET') return json(200, h.listSessions());

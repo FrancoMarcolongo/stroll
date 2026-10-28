@@ -14,6 +14,7 @@ const paths = {
   runsDir: path.join(DATA_DIR, 'runs'),
   hookSettings: path.join(DATA_DIR, 'hook-settings.json'),
   mcpConfig: path.join(DATA_DIR, 'mcp-config.json'),
+  mcpConfigRuns: path.join(DATA_DIR, 'mcp-config-runs.json'),
   mcpServer: path.join(__dirname, '..', 'mcp', 'stroll-mcp.js'),
   appDir: path.join(__dirname, '..', '..'),
 };
@@ -47,36 +48,48 @@ const DEFAULT_CONFIG = {
 
 // Background runs are unattended. They load no settings at all (`--setting-sources ""`), so
 // neither the user's ~/.claude settings (auto mode, broad allow rules) nor a repo's
-// .claude/settings.local.json ("don't ask again" approvals) apply. Only these lists do, and
-// every Bash prefix here is one that can't write or execute through a flag.
+// .claude/settings.local.json ("don't ask again" approvals) apply. Three tiers:
+//  - allowed: runs without asking. Read-only, and no Bash prefix here can write or execute
+//    through a flag.
+//  - disallowed: never runs, not even with approval (edits, git/gh writes, sending).
+//  - everything else: Stroll asks the user (the permission prompt tool in stroll-mcp.js).
 const BACKGROUND_ALLOWED = [
   'Read', 'Grep', 'Glob', 'WebSearch', 'WebFetch', 'Task', 'TodoWrite',
   'Bash(git log:*)', 'Bash(git show:*)', 'Bash(git diff:*)', 'Bash(git status:*)', 'Bash(git blame:*)',
+  // Exact: as prefixes, `git branch -r -d …` would match too.
+  'Bash(git branch -r)', 'Bash(git branch -a)', 'Bash(git branch --list)', 'Bash(git ls-files:*)',
   'Bash(ls:*)', 'Bash(cat:*)', 'Bash(head:*)', 'Bash(tail:*)', 'Bash(wc:*)', 'Bash(grep:*)', 'Bash(jq:*)', 'Bash(cd:*)',
+  // Not sed -n, sort, uniq or file: each can write a file (`w`, -o, a second argument, -C).
+  'Bash(cut:*)', 'Bash(tr:*)', 'Bash(diff:*)', 'Bash(stat:*)',
   'Bash(gh pr view:*)', 'Bash(gh pr list:*)', 'Bash(gh pr diff:*)', 'Bash(gh pr checks:*)',
   'Bash(gh issue view:*)', 'Bash(gh issue list:*)', 'Bash(gh run list:*)', 'Bash(gh run view:*)',
 ];
 const BACKGROUND_DISALLOWED = [
   'Edit', 'Write', 'NotebookEdit',
-  'Bash(git * --output*)',
+  'Bash(git * --output*)', 'Bash(sed -i*)', 'Bash(* -delete*)',
   'Bash(git push:*)', 'Bash(git commit:*)', 'Bash(git checkout:*)', 'Bash(git switch:*)', 'Bash(git reset:*)',
-  'Bash(git rebase:*)', 'Bash(git merge:*)', 'Bash(git stash:*)', 'Bash(git branch:*)', 'Bash(git fetch:*)',
+  'Bash(git rebase:*)', 'Bash(git merge:*)', 'Bash(git stash:*)', 'Bash(git tag:*)', 'Bash(git branch -D:*)', 'Bash(git branch -d:*)',
   'Bash(gh pr create:*)', 'Bash(gh pr merge:*)', 'Bash(gh pr ready:*)', 'Bash(gh pr comment:*)', 'Bash(gh pr close:*)',
-  'Bash(gh pr edit:*)', 'Bash(gh pr review:*)', 'Bash(gh issue create:*)', 'Bash(gh issue comment:*)', 'Bash(gh api:*)',
-  'Bash(curl:*)', 'Bash(wget:*)', 'Bash(python3:*)', 'Bash(python:*)', 'Bash(node:*)', 'Bash(find:*)', 'Bash(rg:*)',
+  'Bash(gh pr edit:*)', 'Bash(gh pr review:*)', 'Bash(gh issue create:*)', 'Bash(gh issue comment:*)', 'Bash(gh issue edit:*)',
+  'Bash(gh issue close:*)', 'Bash(gh release:*)', 'Bash(rm:*)', 'Bash(mv:*)', 'Bash(curl:*)', 'Bash(wget:*)',
   'mcp__claude_ai_Slack__slack_send_message', 'mcp__claude_ai_Slack__slack_send_message_draft',
-  'mcp__claude_ai_Slack__slack_schedule_message', 'mcp__claude_ai_Gmail__send_message',
-  'mcp__claude_ai_Gmail__reply', 'mcp__claude_ai_Gmail__forward',
+  'mcp__claude_ai_Slack__slack_schedule_message', 'mcp__claude_ai_Slack__slack_add_reaction',
+  'mcp__claude_ai_Gmail__send_message', 'mcp__claude_ai_Gmail__reply', 'mcp__claude_ai_Gmail__forward',
 ];
 // Read-only tools of claude.ai connectors, opt-in from Settings: connector content (emails,
 // Slack threads) is the likeliest place for prompt injection, so runs don't read it by default.
+// These have to be listed: Claude Code won't let a permission prompt tool approve connector tools.
 const CONNECTOR_READ_TOOLS = [
-  'mcp__claude_ai_Slack__slack_read_channel', 'mcp__claude_ai_Slack__slack_read_thread',
-  'mcp__claude_ai_Slack__slack_search_public', 'mcp__claude_ai_Slack__slack_search_public_and_private',
-  'mcp__claude_ai_Slack__slack_read_canvas', 'mcp__claude_ai_Slack__slack_read_user_profile',
-  'mcp__claude_ai_Gmail__search_threads', 'mcp__claude_ai_Gmail__get_thread', 'mcp__claude_ai_Gmail__get_message',
-  'mcp__claude_ai_Google_Drive__search_files', 'mcp__claude_ai_Google_Drive__read_file_content',
-  'mcp__claude_ai_Google_Drive__get_file_metadata',
+  ...['read_channel', 'read_thread', 'search_public', 'search_public_and_private', 'read_canvas', 'read_user_profile',
+    'search_channels', 'search_users', 'list_user_channels', 'read_file', 'read_list', 'get_reactions', 'list_channel_members']
+    .map(t => `mcp__claude_ai_Slack__slack_${t}`),
+  ...['search_threads', 'get_thread', 'get_message', 'list_labels'].map(t => `mcp__claude_ai_Gmail__${t}`),
+  ...['search_files', 'read_file_content', 'get_file_metadata', 'list_recent_files', 'download_file_content']
+    .map(t => `mcp__claude_ai_Google_Drive__${t}`),
+  ...['read', 'query', 'guide', 'export'].map(t => `mcp__claude_ai_Claude_Docs__${t}`),
+  ...['search_calls_by_title', 'search_calls_per_client', 'get_complete_call_by_call_id', 'get_recent_calls',
+    'search_transcripts_semantic', 'search_calls_by_participant', 'count_calls', 'get_calls_by_source',
+    'get_all_customers', 'aggregate_calls', 'get_distinct_values'].map(t => `mcp__claude_ai_Proper_Calls__${t}`),
 ];
 
 function backgroundTools(config) {

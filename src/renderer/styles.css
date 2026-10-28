@@ -286,3 +286,16 @@ details[open] > summary::before { transform: rotate(90deg); }
 .toggle input:focus-visible + .switch { box-shadow: 0 0 0 3px var(--accent-soft); }
 .toggle .t-text { display: grid; gap: 2px; }
 .toggle small { color: var(--text-3); font-size: 12px; line-height: 1.45; }
+
+/* background-run approvals */
+.approval { background: linear-gradient(180deg, #2a2312, #1d1a12); border: 1px solid rgba(227, 160, 8, 0.45); border-radius: 12px; padding: 14px 16px; margin-bottom: 16px; display: grid; gap: 10px; }
+.ap-head { display: flex; align-items: center; gap: 8px; }
+.ap-head svg { color: var(--amber); width: 16px; height: 16px; }
+.ap-head .h-meta { color: var(--text-3); font-size: 12px; }
+.ap-detail { margin: 0; font-family: var(--mono); font-size: 12px; background: rgba(0, 0, 0, 0.3); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; white-space: pre-wrap; word-break: break-all; max-height: 220px; overflow: auto; color: var(--text); }
+.ap-rule { display: grid; gap: 5px; font-size: 12px; color: var(--text-2); }
+.ap-rule input { background: var(--bg-input); border: 1px solid var(--line); border-radius: 7px; padding: 6px 10px; font-family: var(--mono); font-size: 12px; outline: none; }
+.ap-rule input:focus { border-color: var(--accent); }
+.approval .actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.approval .actions .help { margin: 0 0 0 4px; }
+.field textarea#set-extra-rules { min-height: 90px; font-family: var(--mono); font-size: 12px; }

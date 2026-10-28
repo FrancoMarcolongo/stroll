@@ -4,9 +4,11 @@ A desktop session manager for [Claude Code](https://claude.com/claude-code). The
 
 - **Sessions you can see at a glance.** Every session keeps running while you look at another. A dot shows which ones need you: green means working, yellow means it needs you (a permission prompt, a question or a plan to approve), blue means it's your turn and you haven't looked yet. Each row shows a one-line preview.
 - **A to-do list you can act on.** Start a session from a to-do (Claude gets it as context), or **hand it off** to a background run. A to-do with a live session shows **In progress**.
-- **Background runs.** Hand off research or prep work. A run investigates and drafts, never changes anything, and pings you when it's ready. You can continue it as a normal session.
+- **Background runs.** Hand off research or prep work. A run investigates and drafts, asks you before doing anything outside its read-only list, and pings you when it's ready. You can continue it as a normal session.
 
 macOS only.
+
+![The overview: what needs you, what's in progress, and your to-dos](docs/screenshots/overview.png)
 
 ## Install
 
@@ -35,6 +37,8 @@ Restarting ends open sessions. When Stroll comes back, **Resume all** brings the
 
 ## Using it
 
+![A live Claude Code session, with to-dos, sessions and background runs in the sidebar](docs/screenshots/session.png)
+
 | | |
 | --- | --- |
 | ⌘K | Add a to-do |
@@ -53,16 +57,27 @@ Restarting ends open sessions. When Stroll comes back, **Resume all** brings the
 - **Elsewhere** lists recent sessions started in other terminals; click one to continue it in Stroll.
 - **Closed** sessions and finished runs can be cleared from their lists. Old ones are cleaned up automatically.
 
-## Background runs are read-only
+## Background runs ask before acting
 
 A background run is a headless `claude -p`. To be safe to leave unattended:
 
 - **It loads none of your Claude Code settings** (`--setting-sources ""`). Neither your personal allow rules nor a repo's "don't ask again" approvals apply.
-- **Tools come from a fixed list:**
-  - It can read files, search, browse the web, read git history and read GitHub PRs and issues.
-  - It can't edit files, commit, push, open PRs, run scripts or send messages.
+- **Some tools it uses without asking:** reading files, searching, browsing the web, reading git history and reading GitHub PRs and issues.
+- **Anything else asks you first.** Running a script, `git fetch` or an unlisted MCP tool pauses the run. It turns yellow in the sidebar and you get a notification. Open it and choose:
+  - **Allow once**: that one call.
+  - **Always allow**: also saves an allow rule for future runs. You can edit the rule before saving it.
+  - **Deny**: the run skips that step and lists it under "Needs you".
+
+  No answer in 15 minutes counts as Deny. Commands with pipes, loops or variables can only be allowed once.
+- **Some things are never allowed,** and it doesn't ask: editing files, commits, pushes, PRs, deleting, `curl`, and sending Slack messages or emails.
 - **Slack, Gmail and Drive reading** is off by default; turn it on in Settings.
 - **It ends with a report:** What I did / Findings / Drafts / Needs you.
+
+![A background run waiting for an OK to run a script](docs/screenshots/background-run.png)
+
+The rules you saved with **Always allow** are listed in Settings under **Also allow without asking**, where you can edit or remove them.
+
+![Settings for background runs](docs/screenshots/settings.png)
 
 Each run uses your Claude plan like any other Claude Code session.
 
@@ -98,7 +113,8 @@ Debug variables (with `STROLL_HOME`):
 
 | Path | Contents |
 | --- | --- |
-| `src/main/` | Electron main process: sessions (PTYs), runs, the local hook/API server, state, config |
+| `src/main/` | Electron main process: sessions (PTYs), runs and their approvals, the local hook/API server, state, config |
 | `src/renderer/` | The UI (vanilla JS and xterm.js) |
-| `src/mcp/stroll-mcp.js` | The `stroll` MCP server |
+| `src/mcp/stroll-mcp.js` | The `stroll` MCP server: to-do tools for sessions, the permission prompt for runs |
 | `bin/stroll` | The launcher |
+| `docs/screenshots/` | README screenshots (demo data) |
