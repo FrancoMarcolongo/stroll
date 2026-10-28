@@ -45,6 +45,8 @@ function toLocalInput(iso) {
 }
 const todo = id => S.data.todos.find(t => t.id === id);
 const session = id => S.data.sessions.find(s => s.id === id);
+// Live sessions in sidebar order (latest activity first); ⌘1–9 and Ctrl+Tab follow it.
+const liveSessions = () => S.data.sessions.filter(s => s.live).sort((a, b) => (b.lastActivityAt || '').localeCompare(a.lastActivityAt || ''));
 const run = id => S.data.runs.find(r => r.id === id);
 
 // Line icons (24px grid, stroked), inlined so the app needs no icon dependency.
@@ -169,7 +171,7 @@ function renderSidebar() {
   patchList($('#todo-list'), open.length ? open.map(todoRow).join('') : '<li class="empty">Nothing open. Add one above.</li>');
   patchList($('#done-list'), done.slice(0, 30).map(todoRow).join(''));
 
-  const live = d.sessions.filter(s => s.live).sort((a, b) => (b.lastActivityAt || '').localeCompare(a.lastActivityAt || ''));
+  const live = liveSessions();
   const closed = d.sessions.filter(s => !s.live).slice(0, 8);
   const restorable = d.sessions.filter(s => !s.live && s.restorable);
   const restoreBar = restorable.length
@@ -211,18 +213,34 @@ function todoState(t) {
   if (runs.some(r => r.unseen && r.status === 'ready')) return { tone: 'idle', label: 'Ready', title: 'Background run finished' };
   return null;
 }
+// Where a to-do's work is happening now, for "Go to": a live session (one that needs you first,
+// then the latest), else an active or unread background run. Starting would make a new one.
+function activeWork(t) {
+  const live = t.sessionIds.map(session).filter(s => s && s.live);
+  if (live.length) {
+    const rank = s => ({ waiting: 0, idle: 1, working: 2 }[sessionDot(s)] ?? 3);
+    live.sort((a, b) => rank(a) - rank(b) || (b.lastActivityAt || '').localeCompare(a.lastActivityAt || ''));
+    return { type: 'session', id: live[0].id };
+  }
+  const runs = t.runIds.map(run).filter(Boolean);
+  const r = runs.find(x => x.pendingApproval) || runs.find(x => x.status === 'running') || runs.find(x => x.unseen && x.status === 'ready');
+  return r ? { type: 'run', id: r.id } : null;
+}
+const workIcon = w => (w.type === 'session' ? ICON.terminal : ICON.activity);
+
 const pillHtml = st => (st ? `<span class="pill ${st.tone}" title="${esc(st.title || '')}"><i></i>${esc(st.label)}</span>` : '');
 
 function todoRow(t) {
   const isActive = S.view.type === 'todo' && S.view.id === t.id;
   const done = t.status === 'done';
+  const work = done ? null : activeWork(t);
   const reminder = t.remindAt && !t.remindedAt && !done
     ? `<span class="reminder" title="Reminder ${esc(new Date(t.remindAt).toLocaleString())}">${ICON.clock}</span>` : '';
   return `<li class="row ${isActive ? 'active' : ''} ${S.selected.has(t.id) ? 'selected' : ''}" data-kind="todo" data-id="${esc(t.id)}">
     <button class="check ${done ? 'done' : ''}" data-act="toggle" title="${done ? 'Reopen' : 'Mark done'}">${ICON.check}</button>
     <div class="main"><div class="title">${esc(t.title)}</div></div>
     <span class="meta">${pillHtml(todoState(t))}${reminder}</span>
-    ${done ? '' : `<span class="row-actions"><button class="icon-btn" data-act="start" title="Start a session">${ICON.play}</button><button class="icon-btn" data-act="handoff" title="Hand off to a background run">${ICON.handoff}</button></span>`}
+    ${done ? '' : `<span class="row-actions">${work ? `<button class="icon-btn" data-act="goto-work" title="Go to its ${work.type === 'session' ? 'session' : 'background run'}">${workIcon(work)}</button>` : ''}<button class="icon-btn" data-act="start" title="${work ? 'Start another session' : 'Start a session'}">${ICON.play}</button><button class="icon-btn" data-act="handoff" title="Hand off to a background run">${ICON.handoff}</button></span>`}
   </li>`;
 }
 
@@ -556,7 +574,7 @@ function renderTodo(header, panel) {
     <span id="todo-pill">${pillHtml(todoState(t))}</span>
     <span class="h-meta">added ${agoText(t.createdAt)}${done ? ` · done ${agoText(t.doneAt)}` : ''}</span>
     <span class="spacer"></span>
-    ${done ? '' : `<button class="btn primary" data-act="start-current">${ICON.play}Start session</button><button class="btn" data-act="handoff-current">${ICON.handoff}Hand off</button>`}
+    ${done ? '' : `<span id="todo-start">${todoStartButtons(t)}</span>`}
     <button class="btn ghost" data-act="toggle-current">${done ? `${ICON.resume}Reopen` : `${ICON.check}Mark done`}</button>
     <button class="btn danger" data-act="delete-current">${ICON.trash}Delete</button>
   `;
@@ -577,6 +595,14 @@ function renderTodo(header, panel) {
   $('#todo-remind').addEventListener('change', e => save({ remindAt: e.target.value ? new Date(e.target.value).toISOString() : null }));
 }
 
+// With work already going, "Go to" leads and starting another session is the secondary choice.
+function todoStartButtons(t) {
+  const work = activeWork(t);
+  return `${work ? `<button class="btn primary" data-act="goto-work-current">${workIcon(work)}Go to ${work.type === 'session' ? 'session' : 'run'}</button>` : ''}`
+    + `<button class="btn ${work ? '' : 'primary'}" data-act="start-current">${ICON.play}${work ? 'New session' : 'Start session'}</button>`
+    + `<button class="btn" data-act="handoff-current">${ICON.handoff}Hand off</button>`;
+}
+
 function renderTodoLinks() {
   const t = todo(S.view.id);
   const box = $('#todo-links');
@@ -584,6 +610,9 @@ function renderTodoLinks() {
   const pill = $('#todo-pill');
   const pillMarkup = pillHtml(todoState(t));
   if (pill && pill.innerHTML !== pillMarkup) pill.innerHTML = pillMarkup;
+  const start = $('#todo-start');
+  const startMarkup = start && todoStartButtons(t);
+  if (start && start.dataset.markup !== startMarkup) { start.innerHTML = startMarkup; start.dataset.markup = startMarkup; }
   const sess = t.sessionIds.map(session).filter(Boolean);
   const runs = t.runIds.map(run).filter(Boolean);
   if (!box.querySelector('ul')) box.innerHTML = '<label>Linked work</label><ul class="list"></ul>';
@@ -820,6 +849,11 @@ document.addEventListener('click', async e => {
     switch (act) {
       case 'toggle': return setTodoDone(id, todo(id)?.status !== 'done');
       case 'start': return startModal([id]);
+      case 'goto-work': case 'goto-work-current': {
+        const t = todo(act === 'goto-work' ? id : S.view.id);
+        const work = t && activeWork(t);
+        return work ? navigate(work) : undefined;
+      }
       case 'handoff': return handoffModal([id]);
       case 'new-session': return startModal([]);
       case 'toggle-current': return setTodoDone(S.view.id, todo(S.view.id)?.status !== 'done');
@@ -992,11 +1026,29 @@ $('#home-btn').addEventListener('click', () => navigate({ type: 'home' }));
 $('#new-session-btn').addEventListener('click', () => startModal([]));
 $('#recent-wrap').addEventListener('toggle', e => { if (e.target.open) refreshRecent(); });
 
+// Ctrl+Tab / Ctrl+Shift+Tab: next / previous live session, in sidebar order. The order is
+// frozen while Ctrl is held, so a session changing status mid-cycle doesn't reshuffle it.
+let cycleOrder = null;
+function cycleSessions(step) {
+  cycleOrder = cycleOrder || liveSessions().map(s => s.id);
+  const ids = cycleOrder.filter(id => session(id)?.live);
+  if (!ids.length) return;
+  const i = S.view.type === 'session' ? ids.indexOf(S.view.id) : -1;
+  const next = i < 0 ? (step > 0 ? 0 : ids.length - 1) : (i + step + ids.length) % ids.length;
+  navigate({ type: 'session', id: ids[next] });
+}
+window.addEventListener('keyup', e => { if (e.key === 'Control') cycleOrder = null; });
+window.addEventListener('blur', () => { cycleOrder = null; });
+
 window.addEventListener('keydown', e => {
+  if (e.key === 'Tab' && e.ctrlKey && !e.metaKey && !e.altKey) {
+    e.preventDefault(); e.stopPropagation();
+    if (S.data) cycleSessions(e.shiftKey ? -1 : 1);
+    return;
+  }
   if (!e.metaKey || e.altKey || e.ctrlKey) return;
   if (/^[1-9]$/.test(e.key)) {
-    const live = S.data.sessions.filter(s => s.live).sort((a, b) => (b.lastActivityAt || '').localeCompare(a.lastActivityAt || ''));
-    const s = live[Number(e.key) - 1];
+    const s = liveSessions()[Number(e.key) - 1];
     if (s) { e.preventDefault(); e.stopPropagation(); navigate({ type: 'session', id: s.id }); }
   }
 }, true);

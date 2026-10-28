@@ -1,5 +1,7 @@
 const crypto = require('crypto');
 const fs = require('fs');
+const os = require('os');
+const path = require('path');
 const pty = require('node-pty');
 const { EventEmitter } = require('events');
 const { childEnv } = require('./config');
@@ -11,9 +13,31 @@ const TRANSCRIPT_TAIL = 512 * 1024;
 const QUICK_EXIT_MS = 6000;
 const SILENT_WORKING_MS = 12000; // Claude's TUI animates while it works; this long without output means it isn't
 const INTERRUPT_SETTLE_MS = 2500;
+const TRUST_WINDOW_MS = 30000;
+const TRUST_QUIET_MS = 700;
 
 const oneLine = s => (s ? String(s).replace(/\s+/g, ' ').trim().slice(0, 200) : '');
 const stripAnsi = s => String(s).replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/g, '').replace(/\x1b\][^\x07\x1b]*(\x07|\x1b\\)/g, '').replace(/\x1b[()][0-9A-Za-z]/g, '');
+
+// The TUI draws spaces as cursor moves, so text is compared with whitespace removed. "No, exit"
+// is selected first and one arrow down is "Yes, I trust this folder". The dialog can redraw
+// (resetting the choice) right after it appears, so each key waits for the screen to go quiet,
+// and Enter only goes out while "Yes" is the one selected; otherwise it gives up and the user
+// answers as usual.
+function watchTrustPrompt(entry, data) {
+  const tr = entry.trust;
+  const send = keys => { try { entry.proc.write(keys); } catch (_) { entry.trust = null; } };
+  clearTimeout(tr.timer);
+  tr.text = (tr.text + stripAnsi(data).replace(/\s+/g, '')).slice(-4000);
+  if (Date.now() - entry.startedAt > TRUST_WINDOW_MS || tr.tries > 3) { entry.trust = null; return; }
+  const yes = tr.text.lastIndexOf('❯Yes,Itrustthisfolder');
+  const no = tr.text.lastIndexOf('❯No,exit');
+  if (tr.moved && yes > no) {
+    tr.timer = setTimeout(() => { entry.trust = null; send('\r'); }, TRUST_QUIET_MS);
+  } else if (no >= 0 && tr.text.includes('Accessingworkspace') && tr.text.indexOf('Yes,Itrustthisfolder', no) > no) {
+    tr.timer = setTimeout(() => { tr.moved = true; tr.tries += 1; tr.text = ''; send('\x1b[B'); }, TRUST_QUIET_MS);
+  }
+}
 
 // One line for the sidebar: the closing question if the reply ends with one, otherwise its
 // first non-heading line (replies tend to lead with the answer).
@@ -125,6 +149,10 @@ class Sessions extends EventEmitter {
     }
     const now = Date.now();
     const entry = { proc, chunks: [], size: 0, seq: 0, modes: new Map(), startedAt: now, lastDataAt: now, lastHookAt: 0, gotHook: false };
+    // Claude Code never remembers trust for the home folder ("home trust is session-only"), so
+    // every session there, resumed ones too, opens on its "Accessing workspace" prompt. Answer
+    // it: in HOME, the folder's project settings are the user's own settings.
+    if (path.resolve(dir) === os.homedir()) entry.trust = { text: '', moved: false, tries: 0, timer: null };
     this.live.set(id, entry);
 
     this.store.upsertSession({
@@ -150,10 +178,12 @@ class Sessions extends EventEmitter {
       entry.size += data.length;
       while (entry.size > BUFFER_LIMIT && entry.chunks.length > 1) entry.size -= entry.chunks.shift().length;
       for (const m of data.matchAll(MODE_RE)) for (const n of m[1].split(';')) entry.modes.set(n, m[2]);
+      if (entry.trust) watchTrustPrompt(entry, data);
       this.emit('data', id, entry.seq, data);
     });
     proc.onExit(({ exitCode }) => {
       this.live.delete(id);
+      if (entry.trust) clearTimeout(entry.trust.timer);
       let detail = null;
       // Died before Claude Code even started (bad flags, auth, missing node…): say why.
       if (!entry.gotHook && Date.now() - entry.startedAt < QUICK_EXIT_MS) {

@@ -299,3 +299,4 @@ details[open] > summary::before { transform: rotate(90deg); }
 .approval .actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .approval .actions .help { margin: 0 0 0 4px; }
 .field textarea#set-extra-rules { min-height: 90px; font-family: var(--mono); font-size: 12px; }
+#todo-start { display: contents; }
