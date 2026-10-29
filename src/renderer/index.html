@@ -32,8 +32,8 @@
         <kbd>⌘K</kbd>
       </form>
       <div id="sidebar-scroll">
-        <section>
-          <header><span>To-dos</span><span class="count" id="todo-count"></span></header>
+        <section data-section="todos">
+          <header draggable="true"><button type="button" class="sec-toggle" data-sec-toggle title="Click to collapse · drag to reorder">To-dos</button><span class="count" id="todo-count"></span></header>
           <ul class="list" id="todo-list"></ul>
           <div id="multi-bar" hidden>
             <span id="multi-count"></span>
@@ -43,20 +43,21 @@
           </div>
           <details id="done-wrap"><summary>Done <span class="count" id="done-count"></span></summary><ul class="list" id="done-list"></ul></details>
         </section>
-        <section>
-          <header><span>Sessions</span><button id="new-session-btn" class="icon-btn" title="New session (⌘N)"><span data-icon="plus"></span></button></header>
+        <section data-section="sessions">
+          <header draggable="true"><button type="button" class="sec-toggle" data-sec-toggle title="Click to collapse · drag to reorder">Sessions</button><button id="new-session-btn" class="icon-btn" title="New session (⌘N)"><span data-icon="plus"></span></button></header>
           <ul class="list" id="session-list"></ul>
         </section>
-        <section>
-          <header><span>Background</span><span class="count" id="run-count"></span></header>
+        <section data-section="runs">
+          <header draggable="true"><button type="button" class="sec-toggle" data-sec-toggle title="Click to collapse · drag to reorder">Background</button><span class="count" id="run-count"></span></header>
           <ul class="list" id="run-list"></ul>
         </section>
-        <section>
-          <header><span>Workflows</span><button id="new-workflow-btn" class="icon-btn" title="New workflow"><span data-icon="plus"></span></button></header>
+        <section data-section="workflows">
+          <header draggable="true"><button type="button" class="sec-toggle" data-sec-toggle title="Click to collapse · drag to reorder">Workflows</button><button id="new-workflow-btn" class="icon-btn" title="New workflow"><span data-icon="plus"></span></button></header>
           <ul class="list" id="workflow-list"></ul>
         </section>
-        <section>
-          <details id="recent-wrap"><summary>Elsewhere <span class="hint">started outside Stroll</span></summary><ul class="list" id="recent-list"></ul></details>
+        <section data-section="recent">
+          <header draggable="true"><button type="button" class="sec-toggle" data-sec-toggle title="Click to collapse · drag to reorder">Elsewhere <span class="hint">started outside Stroll</span></button></header>
+          <ul class="list" id="recent-list"></ul>
         </section>
       </div>
     </aside>

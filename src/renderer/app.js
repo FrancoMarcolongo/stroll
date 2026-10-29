@@ -198,6 +198,9 @@ function renderSidebar() {
 
   patchList($('#recent-list'), S.recent.length ? S.recent.map(recentRow).join('') : `<li class="empty">${S.recentLoaded ? 'Nothing recent.' : 'Loading…'}</li>`);
 
+  const attention = { todos: n.reminders.length, sessions: n.waiting.length + n.yourTurn.length, runs: n.runs.length, workflows: n.workflows.length };
+  for (const [key, count] of Object.entries(attention)) document.querySelector(`section[data-section="${key}"]`)?.toggleAttribute('data-alert', count > 0);
+
   $('#multi-bar').hidden = S.selected.size === 0;
   $('#multi-count').textContent = `${S.selected.size} to-do${S.selected.size === 1 ? '' : 's'} selected`;
 }
@@ -1085,7 +1088,81 @@ $('#new-workflow-btn').addEventListener('click', async () => {
   navigate({ type: 'workflow', id: w.id });
   setTimeout(() => $('#wf-name')?.select(), 100);
 });
-$('#recent-wrap').addEventListener('toggle', e => { if (e.target.open) refreshRecent(); });
+// ---------- sidebar sections: collapse (click the header) and reorder (drag it), kept in config
+const SECTION_KEYS = ['todos', 'sessions', 'runs', 'workflows', 'recent'];
+const SECTION_MIME = 'application/x-stroll-section';
+const sectionOpen = key => !sidebarPrefs().collapsed.has(key);
+
+function sidebarPrefs() {
+  const sb = S.data?.config?.sidebar || {};
+  const saved = (sb.order || []).filter(k => SECTION_KEYS.includes(k));
+  return { order: [...saved, ...SECTION_KEYS.filter(k => !saved.includes(k))], collapsed: new Set(sb.collapsed || []) };
+}
+
+function applySidebarLayout() {
+  const { order, collapsed } = sidebarPrefs();
+  const box = $('#sidebar-scroll');
+  for (const k of order) box.appendChild(box.querySelector(`section[data-section="${k}"]`));
+  for (const sec of box.querySelectorAll('section[data-section]')) sec.classList.toggle('collapsed', collapsed.has(sec.dataset.section));
+}
+
+function saveSidebar(patch) {
+  S.data.config.sidebar = { ...(S.data.config.sidebar || {}), ...patch };
+  applySidebarLayout();
+  api.invoke('config:set', { sidebar: patch });
+}
+
+const sidebarBox = $('#sidebar-scroll');
+sidebarBox.addEventListener('click', e => {
+  const header = e.target.closest('section[data-section] > header');
+  if (!header || e.target.closest('button:not([data-sec-toggle])')) return;
+  const key = header.parentElement.dataset.section;
+  const { collapsed } = sidebarPrefs();
+  if (collapsed.has(key)) collapsed.delete(key); else collapsed.add(key);
+  saveSidebar({ collapsed: [...collapsed] });
+  if (key === 'recent' && !collapsed.has(key)) refreshRecent();
+});
+
+let dragSection = null;
+const clearDropMarks = () => sidebarBox.querySelectorAll('.drop-before, .drop-after').forEach(el => el.classList.remove('drop-before', 'drop-after'));
+function endSectionDrag() {
+  clearDropMarks();
+  sidebarBox.querySelector('.dragging')?.classList.remove('dragging');
+  dragSection = null;
+}
+sidebarBox.addEventListener('dragstart', e => {
+  const header = e.target.closest?.('section[data-section] > header');
+  if (!header) return;
+  dragSection = header.parentElement.dataset.section;
+  e.dataTransfer.setData(SECTION_MIME, dragSection);
+  e.dataTransfer.effectAllowed = 'move';
+  header.parentElement.classList.add('dragging');
+});
+// Handled here, before the document's file-drop handlers see it.
+sidebarBox.addEventListener('dragover', e => {
+  if (!dragSection) return;
+  e.preventDefault();
+  e.stopPropagation();
+  e.dataTransfer.dropEffect = 'move';
+  clearDropMarks();
+  const sec = e.target.closest('section[data-section]');
+  if (!sec || sec.dataset.section === dragSection) return;
+  const r = sec.getBoundingClientRect();
+  sec.classList.add(e.clientY < r.top + Math.min(r.height / 2, 40) ? 'drop-before' : 'drop-after');
+});
+sidebarBox.addEventListener('drop', e => {
+  if (!dragSection) return;
+  e.preventDefault();
+  e.stopPropagation();
+  const target = sidebarBox.querySelector('.drop-before, .drop-after');
+  if (target) {
+    const order = sidebarPrefs().order.filter(k => k !== dragSection);
+    order.splice(order.indexOf(target.dataset.section) + (target.classList.contains('drop-before') ? 0 : 1), 0, dragSection);
+    saveSidebar({ order });
+  }
+  endSectionDrag();
+});
+sidebarBox.addEventListener('dragend', endSectionDrag);
 
 // Ctrl+Tab / Ctrl+Shift+Tab: next / previous live session, in sidebar order. The order is
 // frozen while Ctrl is held, so a session changing status mid-cycle doesn't reshuffle it.
@@ -1162,7 +1239,7 @@ api.on('state:changed', data => {
 });
 
 new ResizeObserver(() => fitVisible()).observe($('#terminals'));
-setInterval(() => { renderSidebar(); if ($('#recent-wrap').open) refreshRecent(); }, 60 * 1000);
+setInterval(() => { renderSidebar(); if (sectionOpen('recent')) refreshRecent(); }, 60 * 1000);
 
 // ---------- banner: Claude Code missing, update available ----------
 function renderBanner() {
@@ -1471,10 +1548,12 @@ function renderSettings(header, panel) {
 // (Claude Code attaches image paths). Drops never navigate the window.
 const shellQuote = p => (/^[\w@%+=:,./-]+$/.test(p) ? p : `'${p.replace(/'/g, "'\\''")}'`);
 document.addEventListener('dragover', e => {
+  if (e.dataTransfer?.types?.includes(SECTION_MIME)) return;
   e.preventDefault();
   if (e.dataTransfer) e.dataTransfer.dropEffect = S.view.type === 'session' && session(S.view.id)?.live ? 'copy' : 'none';
 });
 document.addEventListener('drop', e => {
+  if (e.dataTransfer?.types?.includes(SECTION_MIME)) return;
   e.preventDefault();
   const s = S.view.type === 'session' ? session(S.view.id) : null;
   if (!s?.live) { flash('Drop files on an open session to paste their paths'); return; }
@@ -1500,6 +1579,7 @@ api.on('ui:update', info => { S.update = info; if (S.data) renderBanner(); });
 api.on('config:changed', cfg => {
   if (!S.data) return;
   S.data.config = cfg;
+  applySidebarLayout();
   for (const e of terms.values()) {
     e.term.options.fontSize = Number(cfg.terminal.fontSize) || 13;
     e.term.options.fontFamily = cfg.terminal.fontFamily;
@@ -1516,7 +1596,9 @@ $('#settings-btn').addEventListener('click', () => navigate({ type: 'settings' }
 (async () => {
   S.data = await api.invoke('state:get');
   S.update = S.data.update || null;
+  applySidebarLayout();
   renderSidebar();
+  if (sectionOpen('recent')) refreshRecent();
   renderBanner();
   navigate(pendingView || { type: 'home' });
 })();

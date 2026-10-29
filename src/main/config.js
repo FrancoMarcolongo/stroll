@@ -44,6 +44,8 @@ const DEFAULT_CONFIG = {
     extraDisallowedTools: [],
   },
   updates: { check: true },
+  // Sidebar sections, top to bottom, and which ones are collapsed.
+  sidebar: { order: ['todos', 'sessions', 'runs', 'workflows', 'recent'], collapsed: ['recent'] },
 };
 
 // Background runs are unattended. They load no settings at all (`--setting-sources ""`), so

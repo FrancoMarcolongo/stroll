@@ -211,6 +211,7 @@ function publicConfig() {
       extraAllowedTools: config.background.extraAllowedTools || [],
     },
     updates: config.updates,
+    sidebar: config.sidebar,
     claudePath: config.claudePath,
     claudeMissing: !config.claudePath,
     version: app.getVersion(),

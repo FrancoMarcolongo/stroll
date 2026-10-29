@@ -311,3 +311,14 @@ details[open] > summary::before { transform: rotate(90deg); }
 .field select:focus, .field input[type=time]:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
 .help code, .toggle small code { font-family: var(--mono); font-size: 11.5px; color: var(--text-2); }
 
+/* ---------- sidebar sections: collapse and reorder ---------- */
+section[data-section] > header { cursor: pointer; user-select: none; }
+.sec-toggle { display: inline-flex; align-items: center; gap: 6px; background: none; border: 0; padding: 0; color: inherit; font: inherit; letter-spacing: inherit; text-transform: inherit; cursor: pointer; }
+.sec-toggle::before { content: ''; width: 0; height: 0; border-left: 4px solid currentColor; border-top: 3.5px solid transparent; border-bottom: 3.5px solid transparent; transform: rotate(90deg); transition: transform 0.12s; }
+section.collapsed .sec-toggle::before { transform: none; }
+section.collapsed > :not(header) { display: none !important; }
+section.collapsed[data-alert] .sec-toggle::after { content: ''; width: 6px; height: 6px; border-radius: 50%; background: var(--amber); box-shadow: 0 0 0 2px var(--amber-soft); margin-left: 3px; }
+section.dragging { opacity: 0.45; }
+section.drop-before { box-shadow: inset 0 2px 0 var(--accent); }
+section.drop-after { box-shadow: inset 0 -2px 0 var(--accent); }
+
