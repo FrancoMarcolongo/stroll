@@ -68,10 +68,13 @@ A background run is a headless `claude -p`. To be safe to leave unattended:
 - **Anything else asks you first.** Running a script, `git fetch` or an unlisted MCP tool pauses the run. It turns yellow in the sidebar and you get a notification. Open it and choose:
   - **Allow once**: that one call.
   - **Always allow**: also saves an allow rule for future runs. You can edit the rule before saving it.
+  - **Allow all for this run**: this call and everything else the run asks for, without asking again. **Ask me again** in the run's header turns it back off.
   - **Deny**: the run skips that step and lists it under "Needs you".
 
+  To skip the questions from the start, turn on **Allow everything it asks for** when you hand off. A hand-off requested from inside a Claude session can't turn it on.
+
   No answer in 15 minutes counts as Deny. Commands with pipes, loops or variables can only be allowed once.
-- **Some things are never allowed,** and it doesn't ask: editing files, commits, pushes, PRs, deleting, `curl`, and sending Slack messages or emails.
+- **Some things are never allowed,** and it doesn't ask, even with Allow all: editing files, commits, pushes, PRs, deleting, `curl`, and sending Slack messages or emails. A script you let it run is a different matter: it can do anything you can, so only allow all for runs whose inputs you trust.
 - **Slack, Gmail and Drive reading** is off by default; turn it on in Settings.
 - **It ends with a report:** What I did / Findings / Drafts / Needs you.
 

@@ -116,6 +116,7 @@ function registerRunTools() {
     try {
       const req = await api('POST', '/api/approvals', { runId: process.env.STROLL_RUN || null, toolName: tool_name, input: input || {} });
       if (req.status === 'deny') return deny(req.message);
+      if (req.status === 'allow') return answer({ behavior: 'allow', updatedInput: input || {} });
       for (;;) {
         await sleep(1000);
         const a = await api('GET', `/api/approvals/${req.id}`);

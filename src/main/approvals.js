@@ -42,6 +42,9 @@ class Approvals extends EventEmitter {
   request({ runId, toolName, input }) {
     const run = runId && this.store.run(runId);
     if (!run || run.status !== 'running') return { status: 'deny', message: 'No running background run to approve this for.' };
+    // "Allow all" on this run: yes without asking. Claude Code applied the deny list before
+    // asking, so this only covers tools that are neither allowed nor blocked.
+    if (run.allowAll) return { status: 'allow' };
     const id = crypto.randomUUID();
     const d = describeRequest(toolName, input);
     const item = { id, runId, toolName, ...d, status: 'pending', message: null };
@@ -78,6 +81,14 @@ class Approvals extends EventEmitter {
     }
     // The run polls for the answer; keep it around long enough to be read.
     setTimeout(() => this.items.delete(id), 120000).unref?.();
+    return true;
+  }
+
+  // "Allow all" for one run: also answers what it's waiting on now.
+  setAllowAll(runId, on) {
+    if (!this.store.run(runId)) return false;
+    this.store.patchRun(runId, { allowAll: !!on });
+    if (on) for (const a of this.items.values()) if (a.runId === runId && a.status === 'pending') this.decide(a.id, 'allow');
     return true;
   }
 

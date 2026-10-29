@@ -4,7 +4,7 @@ const INVOKE = new Set([
   'state:get', 'todo:add', 'todo:update', 'todo:delete', 'todo:handoff',
   'session:create', 'session:buffer', 'session:kill', 'session:forget', 'session:rename', 'session:link',
   'session:clearRestorable', 'session:markRead', 'session:mute', 'sessions:clearClosed',
-  'run:markRead', 'run:decide', 'run:events', 'run:cancel', 'run:reviewed', 'run:forget', 'runs:clearFinished',
+  'run:markRead', 'run:decide', 'run:allowAll', 'run:events', 'run:cancel', 'run:reviewed', 'run:forget', 'runs:clearFinished',
   'recent:list', 'dialog:pickDir', 'open:external', 'config:set', 'app:checkUpdates', 'app:applyUpdate',
 ]);
 const SEND = new Set(['session:write', 'session:resize', 'session:interrupt', 'ui:focus']);

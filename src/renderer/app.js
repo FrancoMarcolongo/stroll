@@ -467,17 +467,21 @@ function updateSessionHeader() {
   if (liveBtns !== !!s.live) renderMain();
 }
 
+const runHeaderKey = r => `${r.status}:${runDot(r)}:${r.allowAll ? 'all' : ''}`;
+const ALLOW_ALL_HELP = 'No prompts: it runs scripts, fetches and other tools without asking. Edits, pushes, PRs and sending messages stay blocked, but a script it runs can do anything you can.';
+
 async function renderRun(header, panel) {
   const r = run(S.view.id);
   if (!r) return navigate({ type: 'home' });
   const tone = { running: 'working', failed: 'failed', interrupted: 'failed' }[r.status] || (r.status === 'ready' && r.unseen ? 'idle' : 'neutral');
-  header.dataset.status = `${r.status}:${runDot(r)}`;
+  header.dataset.status = runHeaderKey(r);
   header.innerHTML = `
     <span class="h-title">${esc(r.title)}</span>
     <span class="pill ${tone}"><i></i>${esc((RUN_LABEL[r.status] || r.status).replace(/^./, c => c.toUpperCase()))}</span>
     <span class="h-meta" id="run-meta"></span>
     ${headerChips(r.todoIds)}
     <span class="spacer"></span>
+    ${r.status === 'running' && r.allowAll ? `<span class="pill waiting" title="${esc(ALLOW_ALL_HELP)}"><i></i>Allowing all</span><button class="btn ghost" data-act="run-ask-again">Ask me again</button>` : ''}
     ${r.status === 'running' ? `<button class="btn danger" data-act="cancel-run">${ICON.stop}Cancel</button>` : ''}
     ${r.status !== 'running' ? `<button class="btn primary" data-act="open-run">${ICON.terminal}Continue in a session</button>` : ''}
     ${r.status === 'ready' || r.status === 'failed' ? `<button class="btn ghost" data-act="reviewed-run">${ICON.read}Mark reviewed</button>` : ''}
@@ -527,6 +531,7 @@ function renderRunApproval() {
     <div class="actions">
       <button class="btn primary" data-act="ap-allow">${ICON.check}Allow once</button>
       ${a.rule ? `<button class="btn" data-act="ap-always">${ICON.read}Always allow</button>` : ''}
+      <button class="btn" data-act="ap-all" title="${esc(ALLOW_ALL_HELP)}">Allow all for this run</button>
       <button class="btn danger" data-act="ap-deny">Deny</button>
       <span class="help">No answer in 15 minutes counts as Deny.</span>
     </div>
@@ -729,13 +734,18 @@ function handoffModal(todoIds) {
     <div class="sub">${todos.map(t => esc(t.title)).join(' · ')}<br>It investigates and drafts, never edits, pushes or sends, and asks you before anything else. You'll get a notification when it's ready or needs you.</div>
     <div class="field"><label>Instructions</label><textarea name="instructions" rows="5" placeholder="Optional. What should it look at, what should the draft be?"></textarea></div>
     ${dirField(cwd)}
+    ${toggle('handoff-allow-all', false, 'Allow everything it asks for', ALLOW_ALL_HELP)}
     <footer><button class="btn ghost" data-close>Cancel</button><button class="btn primary" data-go>${ICON.handoff}Hand off <kbd>⌘↩</kbd></button></footer>
   `, (m, close) => {
     const cwdInput = wireDirField(m);
     const go = async () => {
       let id;
       try {
-        id = await api.invoke('todo:handoff', todoIds, { instructions: m.querySelector('[name=instructions]').value.trim(), cwd: cwdInput.value.trim() || null });
+        id = await api.invoke('todo:handoff', todoIds, {
+          instructions: m.querySelector('[name=instructions]').value.trim(),
+          cwd: cwdInput.value.trim() || null,
+          allowAll: m.querySelector('#handoff-allow-all').checked,
+        });
       } catch (err) { return flashError(err); }
       close();
       S.selected.clear();
@@ -907,6 +917,12 @@ document.addEventListener('click', async e => {
         await api.invoke('run:decide', a.id, decision, rule);
         return flash(act === 'ap-always' ? `Allowed, and saved “${rule}” for future runs` : decision === 'allow' ? 'Allowed once' : 'Denied');
       }
+      case 'ap-all':
+        await api.invoke('run:allowAll', S.view.id, true);
+        return flash('Allowing everything this run asks for');
+      case 'run-ask-again':
+        await api.invoke('run:allowAll', S.view.id, false);
+        return flash('This run asks you again');
       case 'apply-update': return applyUpdate();
       case 'dismiss-update': S.update = null; return renderBanner();
       case 'open-settings': return navigate({ type: 'settings' });
@@ -1091,7 +1107,7 @@ api.on('state:changed', data => {
     else {
       updateRunMeta();
       const headerRunning = !!$('#view-header [data-act="cancel-run"]');
-      if (headerRunning !== (r.status === 'running') || $('#view-header').dataset.status !== `${r.status}:${runDot(r)}`) renderMain();
+      if (headerRunning !== (r.status === 'running') || $('#view-header').dataset.status !== runHeaderKey(r)) renderMain();
       else { renderRunResult(); renderRunApproval(); }
     }
   }

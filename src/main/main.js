@@ -80,7 +80,9 @@ function updateBadge() {
   app.dock?.setBadge(total ? String(total) : '');
 }
 
-function startHandoff(todoIds, { instructions = '', prompt = null, cwd = null, title = null } = {}) {
+// `allowAll` comes only from the hand-off dialog: a hand-off asked for from inside a Claude
+// session (the MCP tool) can't turn off the run's permission prompts.
+function startHandoff(todoIds, { instructions = '', prompt = null, cwd = null, title = null, allowAll = false } = {}) {
   const todos = todoIds.map(id => store.todo(id)).filter(Boolean);
   const dir = cwd || todos.find(t => t.cwd)?.cwd || store.state.recentDirs[0] || config.defaultCwd;
   return runs.start({
@@ -88,6 +90,7 @@ function startHandoff(todoIds, { instructions = '', prompt = null, cwd = null, t
     cwd: dir,
     title: title || (todos.length === 1 ? todos[0].title : todos.length ? `${todos.length} to-dos` : null),
     todoIds,
+    allowAll,
   });
 }
 
@@ -306,6 +309,7 @@ function registerIpc() {
   });
   handle('run:markRead', (id, read) => store.patchRun(id, { unseen: !read }));
   handle('run:decide', (approvalId, decision, rule) => approvals.decide(approvalId, decision, rule));
+  handle('run:allowAll', (id, on) => approvals.setAllowAll(id, on));
   handle('session:clearRestorable', () => {
     for (const s of store.state.sessions) if (s.restorable) s.restorable = false;
     store.changed();
