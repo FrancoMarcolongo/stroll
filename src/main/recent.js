@@ -83,4 +83,10 @@ function transcriptFor(id) {
   return null;
 }
 
-module.exports = { recentSessions, transcriptFor };
+// The first thing the user typed in a session, from its transcript.
+function firstPrompt(id) {
+  const file = transcriptFor(id);
+  return file ? describe(file).prompt : null;
+}
+
+module.exports = { recentSessions, transcriptFor, firstPrompt };

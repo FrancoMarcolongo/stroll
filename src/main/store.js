@@ -9,7 +9,7 @@ const KEEP_CLOSED_SESSIONS = 100;
 const KEEP_FINISHED_RUNS_DAYS = 30;
 
 function emptyState() {
-  return { version: 1, todos: [], sessions: [], runs: [], recentDirs: [] };
+  return { version: 1, todos: [], sessions: [], runs: [], workflows: [], recentDirs: [] };
 }
 
 // Single writer: the app owns state.json. The MCP server goes through the app's HTTP API.
@@ -180,6 +180,33 @@ class Store extends EventEmitter {
     const drop = new Set(ids);
     this.state.runs = this.state.runs.filter(r => !drop.has(r.id));
     for (const t of this.state.todos) t.runIds = t.runIds.filter(x => !drop.has(x));
+    this.changed();
+  }
+
+  // --- workflows (saved session templates; see workflows.js) ---
+  workflow(id) { return this.state.workflows.find(w => w.id === id); }
+
+  addWorkflow(fields = {}) {
+    const w = {
+      id: crypto.randomUUID(), name: 'New workflow', cwd: null, mode: 'session', template: '', prepareTemplate: '',
+      values: {}, runAllowAll: false, schedule: null, scheduleSetAt: null, due: null, lastSlotAt: null,
+      lastStartedAt: null, createdAt: now(), ...fields,
+    };
+    this.state.workflows.push(w);
+    this.changed();
+    return w;
+  }
+
+  updateWorkflow(id, patch) {
+    const w = this.workflow(id);
+    if (!w) return null;
+    Object.assign(w, patch);
+    this.changed();
+    return w;
+  }
+
+  deleteWorkflow(id) {
+    this.state.workflows = this.state.workflows.filter(w => w.id !== id);
     this.changed();
   }
 

@@ -48,6 +48,7 @@ const session = id => S.data.sessions.find(s => s.id === id);
 // Live sessions in sidebar order (latest activity first); ⌘1–9 and Ctrl+Tab follow it.
 const liveSessions = () => S.data.sessions.filter(s => s.live).sort((a, b) => (b.lastActivityAt || '').localeCompare(a.lastActivityAt || ''));
 const run = id => S.data.runs.find(r => r.id === id);
+const workflow = id => (S.data.workflows || []).find(w => w.id === id);
 
 // Line icons (24px grid, stroked), inlined so the app needs no icon dependency.
 const svgIcon = body => `<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${body}</svg>`;
@@ -154,6 +155,7 @@ function needsYou(d) {
     yourTurn: live.filter(s => sessionDot(s) === 'idle'),
     runs: d.runs.filter(r => ['idle', 'waiting'].includes(runDot(r))),
     reminders: d.todos.filter(t => t.status === 'open' && t.remindAt && !t.remindAck && new Date(t.remindAt) <= new Date()),
+    workflows: (d.workflows || []).filter(w => w.due && !w.due.runId),
   };
 }
 
@@ -163,7 +165,7 @@ function renderSidebar() {
   const open = d.todos.filter(t => t.status === 'open').sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
   const done = d.todos.filter(t => t.status === 'done').sort((a, b) => (b.doneAt || '').localeCompare(a.doneAt || ''));
   const n = needsYou(d);
-  $('#nav-needs').textContent = (n.waiting.length + n.yourTurn.length + n.runs.length + n.reminders.length) || '';
+  $('#nav-needs').textContent = (n.waiting.length + n.yourTurn.length + n.runs.length + n.reminders.length + n.workflows.length) || '';
   $('#home-btn').classList.toggle('active', S.view.type === 'home');
   $('#settings-btn').classList.toggle('active', S.view.type === 'settings');
   $('#todo-count').textContent = open.length || '';
@@ -190,6 +192,9 @@ function renderSidebar() {
     ? [...activeRuns, ...runs.filter(r => r.status === 'reviewed').slice(0, 5)].map(runRow).join('')
       + (finished ? `<li class="divider">${finished} finished<button class="link-btn" data-act="clear-runs">Clear</button></li>` : '')
     : '<li class="empty">Hand off a to-do to run it here.</li>');
+
+  patchList($('#workflow-list'), (d.workflows || []).map(workflowRow).join('')
+    || '<li class="empty">Add one with +, or right-click a session and save it as a workflow.</li>');
 
   patchList($('#recent-list'), S.recent.length ? S.recent.map(recentRow).join('') : `<li class="empty">${S.recentLoaded ? 'Nothing recent.' : 'Loading…'}</li>`);
 
@@ -378,7 +383,7 @@ function navigate(view) {
 // A view can be opened for something created a moment ago (a new session, a hand-off) before
 // the state:changed push arrives; fetch fresh state once before giving up on it.
 async function ensureKnown(view) {
-  const find = { session, run, todo }[view.type];
+  const find = { session, run, todo, workflow }[view.type];
   if (!find || find(view.id)) return true;
   const fresh = await api.invoke('state:get');
   S.data = { ...fresh, config: S.data.config };
@@ -388,7 +393,7 @@ async function ensureKnown(view) {
 
 function renderMain() {
   const v = S.view;
-  const find = { session, run, todo }[v.type];
+  const find = { session, run, todo, workflow }[v.type];
   if (find && !find(v.id)) {
     ensureKnown(v).then(ok => { if (S.view === v) { if (ok) renderMain(); else navigate({ type: 'home' }); } });
     return;
@@ -406,6 +411,7 @@ function renderMain() {
   if (v.type === 'session') return renderSession(header, termsEl);
   if (v.type === 'run') return renderRun(header, panel);
   if (v.type === 'todo') return renderTodo(header, panel);
+  if (v.type === 'workflow') return renderWorkflow(header, panel);
   if (v.type === 'settings') return renderSettings(header, panel);
   return renderHome(header, panel);
 }
@@ -634,6 +640,7 @@ function renderHome(header, panel) {
     ...n.waiting.map(sessionRow),
     ...n.runs.map(runRow),
     ...n.reminders.map(todoRow),
+    ...n.workflows.map(workflowRow),
     ...n.yourTurn.map(sessionRow),
   ];
   const progress = [...live.filter(s => s.status === 'working' || s.status === 'starting').map(sessionRow), ...d.runs.filter(r => r.status === 'running' && !r.pendingApproval).map(runRow)];
@@ -923,6 +930,33 @@ document.addEventListener('click', async e => {
       case 'run-ask-again':
         await api.invoke('run:allowAll', S.view.id, false);
         return flash('This run asks you again');
+      case 'wf-start': return startWorkflowModal(id);
+      case 'wf-start-current': return startWorkflowModal(S.view.id);
+      case 'wf-prepare': {
+        try { flash('Preparing in the background', await api.invoke('workflow:prepare', S.view.id)); } catch (err) { flashError(err); }
+        return undefined;
+      }
+      case 'wf-dismiss': return api.invoke('workflow:dismiss', S.view.id);
+      case 'wf-open-run': return navigate({ type: 'run', id: workflow(S.view.id)?.due?.runId });
+      case 'wf-continue': {
+        const r = run(workflow(S.view.id)?.due?.runId);
+        if (!r) return undefined;
+        await api.invoke('run:reviewed', r.id);
+        return resumeSession(r.id, r.title, r.cwd);
+      }
+      case 'wf-delete': {
+        const w = workflow(S.view.id);
+        if (await confirmModal({ title: `Delete “${w.name}”?`, body: 'Its past sessions and runs stay.', confirm: 'Delete', danger: true })) {
+          await api.invoke('workflow:delete', w.id);
+          navigate({ type: 'home' });
+        }
+        return undefined;
+      }
+      case 'wf-pick-cwd': {
+        const d = await api.invoke('dialog:pickDir', $('#wf-cwd').value);
+        if (d) { $('#wf-cwd').value = d; api.invoke('workflow:update', S.view.id, { cwd: d }); }
+        return undefined;
+      }
       case 'apply-update': return applyUpdate();
       case 'dismiss-update': S.update = null; return renderBanner();
       case 'open-settings': return navigate({ type: 'settings' });
@@ -999,6 +1033,12 @@ document.addEventListener('contextmenu', e => {
   if (dot === 'idle' || dot === 'waiting') items.push([`${ICON.read}Mark as read`, () => api.invoke(`${kind}:markRead`, id, true)]);
   else if (dot === 'none' && (kind === 'session' ? item.live : item.status !== 'running')) items.push([`${ICON.unread}Mark as unread`, () => api.invoke(`${kind}:markRead`, id, false)]);
   if (kind === 'session') items.push([item.muted ? `${ICON.bell}Unmute notifications` : `${ICON.mute}Mute notifications`, () => api.invoke('session:mute', id, !item.muted)]);
+  items.push([`${ICON.list}Save as workflow`, async () => {
+    const w = await api.invoke(kind === 'session' ? 'workflow:fromSession' : 'workflow:fromRun', id);
+    if (!w) return;
+    navigate({ type: 'workflow', id: w.id });
+    flash('Saved as a workflow. Mark what changes each time with {{name}}.');
+  }]);
   if (kind === 'run' && item.status !== 'running') items.push([`${ICON.trash}Remove`, async () => { await api.invoke('run:forget', id); if (S.view.type === 'run' && S.view.id === id) navigate({ type: 'home' }); }]);
   if (!items.length) return;
   e.preventDefault();
@@ -1040,6 +1080,11 @@ $('#quick-add-input').addEventListener('keydown', e => {
 });
 $('#home-btn').addEventListener('click', () => navigate({ type: 'home' }));
 $('#new-session-btn').addEventListener('click', () => startModal([]));
+$('#new-workflow-btn').addEventListener('click', async () => {
+  const w = await api.invoke('workflow:add', {});
+  navigate({ type: 'workflow', id: w.id });
+  setTimeout(() => $('#wf-name')?.select(), 100);
+});
 $('#recent-wrap').addEventListener('toggle', e => { if (e.target.open) refreshRecent(); });
 
 // Ctrl+Tab / Ctrl+Shift+Tab: next / previous live session, in sidebar order. The order is
@@ -1101,6 +1146,9 @@ api.on('state:changed', data => {
     const t = todo(v.id);
     if (!t) navigate({ type: 'home' });
     else { renderTodoLinks(); const check = $('#view-header .check'); if (check && check.classList.contains('done') !== (t.status === 'done')) renderMain(); }
+  } else if (v.type === 'workflow') {
+    if (!workflow(v.id)) navigate({ type: 'home' });
+    else renderWorkflowLive();
   } else if (v.type === 'run') {
     const r = run(v.id);
     if (!r) navigate({ type: 'home' });
@@ -1152,10 +1200,202 @@ function nextNeedingYou() {
     ...n.yourTurn.map(s => ({ type: 'session', id: s.id })),
     ...n.runs.map(r => ({ type: 'run', id: r.id })),
     ...n.reminders.map(t => ({ type: 'todo', id: t.id })),
+    ...n.workflows.map(w => ({ type: 'workflow', id: w.id })),
   ];
   if (!list.length) return flash('Nothing needs you right now');
   const i = list.findIndex(v => v.type === S.view.type && v.id === S.view.id);
   return navigate(list[(i + 1) % list.length]);
+}
+
+// ---------- workflows ----------
+// Saved session templates for recurring work (see src/main/workflows.js for the blanks syntax).
+const MODE_LABEL = { session: 'Opens a session', run: 'Runs in the background' };
+const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+// "today 10:00 AM", "Mon 10:00 AM", or with the date when it's more than a few days away.
+function slotText(iso) {
+  if (!iso) return '';
+  const d = new Date(iso);
+  const days = Math.round((new Date(iso).setHours(0, 0, 0, 0) - new Date().setHours(0, 0, 0, 0)) / 86400000);
+  const time = d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+  if (days === 0) return `today ${time}`;
+  if (days === 1) return `tomorrow ${time}`;
+  if (days === -1) return `yesterday ${time}`;
+  const opts = Math.abs(days) < 7 ? { weekday: 'short' } : { weekday: 'short', month: 'short', day: 'numeric' };
+  return `${d.toLocaleDateString(undefined, opts)} ${time}`;
+}
+
+// Due is yellow; a workflow prepared in the background follows its run.
+function workflowDot(w) {
+  if (!w.due) return 'none';
+  if (!w.due.runId) return 'waiting';
+  const r = run(w.due.runId);
+  return r ? runDot(r) : 'none';
+}
+
+function workflowStatus(w) {
+  const d = w.due;
+  if (d?.error) return `Couldn't prepare: ${d.error}`;
+  if (d?.missed) return `Missed ${slotText(d.at)}`;
+  if (d?.runId) {
+    const r = run(d.runId);
+    if (!r) return 'Its prepared run was removed';
+    if (r.pendingApproval) return 'Preparing · needs your OK';
+    if (r.status === 'running') return 'Preparing in the background…';
+    return r.status === 'ready' || r.status === 'reviewed' ? 'Prepared · ready to continue' : `Prep ${RUN_LABEL[r.status] || r.status}`;
+  }
+  if (d) return `Due since ${slotText(d.at)}`;
+  if (w.nextAt) return `Next ${slotText(w.nextAt)}`;
+  if (w.lastStartedAt) return `Last started ${agoText(w.lastStartedAt)}`;
+  return MODE_LABEL[w.mode] || '';
+}
+
+function workflowRow(w) {
+  const isActive = S.view.type === 'workflow' && S.view.id === w.id;
+  return `<li class="row ${isActive ? 'active' : ''}" data-kind="workflow" data-id="${esc(w.id)}">
+    ${dotHtml(workflowDot(w))}
+    <div class="main"><div class="title">${esc(w.name)}</div><div class="sub">${esc(workflowStatus(w))}</div></div>
+    <span class="row-actions"><button class="icon-btn" data-act="wf-start" title="Start">${ICON.play}</button></span>
+  </li>`;
+}
+
+function renderWorkflow(header, panel) {
+  const w = workflow(S.view.id);
+  if (!w) return navigate({ type: 'home' });
+  header.innerHTML = `
+    <span class="h-title" id="wf-title">${esc(w.name)}</span>
+    <span id="wf-pill"></span>
+    <span class="h-meta" id="wf-meta"></span>
+    <span class="spacer"></span>
+    <button class="btn primary" data-act="wf-start-current">${ICON.play}Start</button>
+    <button class="btn" data-act="wf-prepare" title="Run the prep message in the background now">${ICON.handoff}Prepare now</button>
+    <button class="btn danger" data-act="wf-delete">${ICON.trash}Delete</button>`;
+  const sched = w.schedule || { days: [], time: '10:00', action: 'remind' };
+  panel.innerHTML = `<div class="todo-view wf-view">
+    <div id="wf-due"></div>
+    <div class="field links"><label>History</label><ul class="list" id="wf-history"></ul></div>
+    <section class="set-group"><h3>Setup</h3>
+      <div class="field"><label>Name</label><input type="text" id="wf-name" value="${esc(w.name)}"></div>
+      <div class="field"><label>Working directory</label><div class="inline"><input type="text" id="wf-cwd" value="${esc(w.cwd || '')}" placeholder="${esc(S.data.config.defaultCwd)}"><button class="btn" data-act="wf-pick-cwd">Browse…</button></div></div>
+      <div class="field"><label>Runs as</label><select id="wf-mode">
+        <option value="session" ${w.mode !== 'run' ? 'selected' : ''}>A session: you work through it with Claude</option>
+        <option value="run" ${w.mode === 'run' ? 'selected' : ''}>A background run: it reports back when done</option></select></div>
+      <div class="field"><label>First message</label><textarea id="wf-template" rows="3" spellcheck="false" placeholder="/plugin:skill {{stories=every story In Development}}">${esc(w.template)}</textarea>
+        <p class="help">What Stroll types for you; a skill works as in the terminal. Blanks become the start form: <code>{{name}}</code> a text field, <code>{{name=default}}</code> one with a default, <code>{{name?text}}</code> a switch that adds <code>text</code>.</p></div>
+      <div class="field"><label>Prep message (optional)</label><textarea id="wf-prepare" rows="2" spellcheck="false" placeholder="The read-only half, e.g. a diff-only or report-only variant. Same blanks.">${esc(w.prepareTemplate || '')}</textarea>
+        <p class="help">"Prepare now" and a scheduled prep run this in the background with your last values. When it's ready, continue it in a session to do the rest. Empty means the first message.</p></div>
+      ${toggle('wf-allow-all', w.runAllowAll, 'Its background runs allow everything they ask for', ALLOW_ALL_HELP)}
+    </section>
+    <section class="set-group"><h3>Schedule</h3>
+      <div class="field"><label>Days</label><div class="day-picks">${DAYS.map((d, i) => `<button type="button" class="chip day ${sched.days.includes(i) ? 'on' : ''}" data-day="${i}">${d}</button>`).join('')}</div></div>
+      <div class="field two"><div><label>Time</label><input type="time" id="wf-time" value="${esc(sched.time)}"></div>
+        <div><label>When it's due</label><select id="wf-action">
+          <option value="remind" ${sched.action !== 'prepare' ? 'selected' : ''}>Remind me</option>
+          <option value="prepare" ${sched.action === 'prepare' ? 'selected' : ''}>Prepare in the background, then tell me</option></select></div></div>
+      <p class="help" id="wf-sched-help"></p>
+    </section>
+  </div>`;
+  renderWorkflowLive();
+
+  const save = patch => api.invoke('workflow:update', w.id, patch);
+  const on = (sel, ev, fn) => panel.querySelector(sel).addEventListener(ev, fn);
+  on('#wf-name', 'change', e => { const v = e.target.value.trim(); if (v) save({ name: v }); });
+  on('#wf-cwd', 'change', e => save({ cwd: e.target.value.trim() || null }));
+  on('#wf-mode', 'change', e => save({ mode: e.target.value }));
+  on('#wf-template', 'change', e => save({ template: e.target.value.trim() }));
+  on('#wf-prepare', 'change', e => save({ prepareTemplate: e.target.value.trim() }));
+  on('#wf-allow-all', 'change', e => save({ runAllowAll: e.target.checked }));
+  const saveSchedule = () => {
+    const days = [...panel.querySelectorAll('.day.on')].map(b => Number(b.dataset.day));
+    save({ schedule: days.length ? { days, time: $('#wf-time').value || '10:00', action: $('#wf-action').value } : null });
+  };
+  panel.querySelectorAll('.day').forEach(b => b.addEventListener('click', () => { b.classList.toggle('on'); saveSchedule(); }));
+  on('#wf-time', 'change', saveSchedule);
+  on('#wf-action', 'change', saveSchedule);
+}
+
+// The parts of the workflow view that follow state pushes; the setup form is left alone so
+// typing isn't interrupted.
+function renderWorkflowLive() {
+  const w = workflow(S.view.id);
+  if (!w || !$('#wf-due')) return;
+  const setHtml = (el, markup) => { if (el && el.dataset.markup !== markup) { el.innerHTML = markup; el.dataset.markup = markup; } };
+  $('#wf-title').textContent = w.name;
+  $('#wf-meta').textContent = `${shortDir(w.cwd || S.data.config.defaultCwd)} · ${MODE_LABEL[w.mode] || ''}`;
+  const dot = workflowDot(w);
+  setHtml($('#wf-pill'), w.due ? `<span class="pill ${dot === 'none' ? 'neutral' : dot}"><i></i>${esc(workflowStatus(w))}</span>`
+    : w.nextAt ? `<span class="pill neutral"><i></i>Next ${esc(slotText(w.nextAt))}</span>` : '');
+
+  const d = w.due;
+  const r = d?.runId ? run(d.runId) : null;
+  const heading = d?.error ? "Couldn't prepare it" : d?.missed ? 'Missed while Stroll was closed'
+    : r?.pendingApproval ? 'Preparing: it needs your OK' : r?.status === 'running' ? 'Preparing in the background'
+      : d?.runId ? 'Prepared in the background' : 'Due now';
+  setHtml($('#wf-due'), !d ? '' : `<div class="approval">
+    <div class="ap-head">${ICON.bell}<b>${heading}</b><span class="h-meta">${d.scheduled === false ? 'started' : 'scheduled'} ${esc(slotText(d.at))}</span></div>
+    ${d.error ? `<p class="help">${esc(d.error)}</p>` : ''}
+    ${r ? `<ul class="list" style="padding:0">${runRow(r)}</ul>` : ''}
+    <div class="actions">
+      ${r && r.status !== 'running' ? `<button class="btn primary" data-act="wf-continue">${ICON.terminal}Continue in a session</button>`
+    : r ? `<button class="btn ${r.pendingApproval ? 'primary' : ''}" data-act="wf-open-run">${ICON.activity}Open run</button>`
+      : `<button class="btn primary" data-act="wf-start-current">${ICON.play}Start</button>`}
+      ${d.missed ? `<button class="btn" data-act="wf-prepare">${ICON.handoff}Prepare now</button>` : ''}
+      <button class="btn ghost" data-act="wf-dismiss">Dismiss</button>
+    </div></div>`);
+
+  const items = [
+    ...S.data.sessions.filter(s => s.workflowId === w.id).map(s => ({ at: s.createdAt || s.lastActivityAt, html: sessionRow(s) })),
+    ...S.data.runs.filter(x => x.workflowId === w.id).map(x => ({ at: x.startedAt, html: runRow(x) })),
+  ].sort((a, b) => (b.at || '').localeCompare(a.at || '')).slice(0, 12);
+  patchList($('#wf-history'), items.map(i => i.html).join('') || '<li class="empty" style="padding-left:0">Nothing yet. Its sessions and runs show up here.</li>');
+  $('#wf-sched-help').textContent = w.schedule
+    ? `Next: ${slotText(w.nextAt)}. It fires only while Stroll is open; a time missed while it was closed shows up as missed, it doesn't run late.`
+    : 'Pick one or more days to schedule it.';
+}
+
+// The start form: the template's blanks, filled with last time's values, and what will be sent.
+async function startWorkflowModal(id) {
+  const w = workflow(id);
+  if (!w) return;
+  const { fields } = await api.invoke('workflow:render', w.template, w.values);
+  const values = { ...w.values };
+  modal(`
+    <h2>Start “${esc(w.name)}”</h2>
+    <div class="sub">${esc(MODE_LABEL[w.mode] || '')} in ${esc(shortDir(w.cwd || S.data.config.defaultCwd))}</div>
+    ${fields.map(f => (f.kind === 'switch'
+    ? toggle(`wf-f-${f.key}`, Boolean(values[f.key]), esc(f.label), `Adds <code>${esc(f.text)}</code>`)
+    : `<div class="field"><label>${esc(f.label)}</label><input type="text" data-key="${esc(f.key)}" value="${esc(values[f.key] ?? '')}" placeholder="${esc(f.default)}" spellcheck="false"></div>`)).join('')}
+    <div class="field"><label>${w.mode === 'run' ? 'Prompt' : 'First message'}</label><pre class="wf-preview" id="wf-preview"></pre></div>
+    <footer><button class="btn ghost" data-close>Cancel</button><button class="btn primary" data-go>${ICON.play}Start <kbd>↩</kbd></button></footer>
+  `, (m, close) => {
+    const read = () => {
+      for (const f of fields) {
+        values[f.key] = f.kind === 'switch'
+          ? m.querySelector(`#wf-f-${CSS.escape(f.key)}`).checked
+          : m.querySelector(`[data-key="${CSS.escape(f.key)}"]`).value.trim();
+      }
+      return values;
+    };
+    const preview = async () => {
+      const { text } = await api.invoke('workflow:render', w.template, read());
+      m.querySelector('#wf-preview').textContent = text || 'Empty. Add a first message under Setup.';
+    };
+    m.addEventListener('input', preview);
+    m.addEventListener('change', preview);
+    preview();
+    const go = async () => {
+      let view;
+      try { view = await api.invoke('workflow:start', id, read()); } catch (err) { return flashError(err); }
+      close();
+      return navigate(view);
+    };
+    m.querySelector('[data-go]').addEventListener('click', go);
+    m.querySelector('[data-close]').addEventListener('click', close);
+    m.addEventListener('keydown', e => {
+      if (e.key === 'Enter' && (e.metaKey || e.target.type === 'text')) { e.preventDefault(); go(); }
+      if (e.key === 'Escape') close();
+    });
+    (m.querySelector('input[type=text]') || m.querySelector('[data-go]')).focus();
+  });
 }
 
 // ---------- settings ----------

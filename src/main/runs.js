@@ -4,6 +4,7 @@ const path = require('path');
 const { spawn } = require('child_process');
 const { EventEmitter } = require('events');
 const { childEnv, backgroundTools } = require('./config');
+const { runSkillSetup, userEnabledPlugins } = require('./workflows');
 
 const BACKGROUND_RULES = [
   "You are a background agent started from Stroll, the user's session manager. Nobody is watching this run live; the user will read your final message later and may continue this session interactively.",
@@ -95,7 +96,7 @@ class Runs extends EventEmitter {
     return true;
   }
 
-  start({ prompt, cwd, title, todoIds = [], allowAll = false }) {
+  start({ prompt: text, cwd, title, todoIds = [], allowAll = false, workflowId = null }) {
     if (!this.config.claudePath) throw new Error('Claude Code (`claude`) was not found on your PATH.');
     const id = crypto.randomUUID();
     const bg = this.config.background || {};
@@ -115,12 +116,15 @@ class Runs extends EventEmitter {
       '--disallowedTools', tools.disallowed.join(','),
     ];
     if (bg.model) args.splice(args.indexOf('--append-system-prompt'), 0, '--model', bg.model);
+    const { prompt, settings } = runSkillSetup(text, { enabledPlugins: userEnabledPlugins() });
+    if (settings) args.push('--settings', JSON.stringify(settings));
 
     this.store.addRun({
-      id, title: title || prompt.split('\n')[0].slice(0, 80), prompt, cwd: dir, todoIds,
+      id, title: title || text.split('\n')[0].slice(0, 80), prompt: text, cwd: dir, todoIds,
       status: 'running', startedAt: new Date().toISOString(), finishedAt: null,
       result: null, error: null, costUsd: null, durationMs: null, numTurns: null, lastActivity: 'Starting…',
       allowAll: !!allowAll,
+      workflowId,
     });
     this.store.rememberDir(dir);
     this.cacheEvents(id, []);

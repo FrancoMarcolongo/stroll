@@ -4,6 +4,7 @@ A desktop session manager for [Claude Code](https://claude.com/claude-code). The
 
 - **Sessions you can see at a glance.** Every session keeps running while you look at another. A dot shows which ones need you: green means working, yellow means it needs you (a permission prompt, a question or a plan to approve), blue means it's your turn and you haven't looked yet. Each row shows a one-line preview.
 - **A to-do list you can act on.** Start a session from a to-do (Claude gets it as context), or **hand it off** to a background run. A to-do with a live session shows **In progress**.
+- **Workflows for recurring work.** Save a session you run every week (a release, a ticket sync) with the blanks it needs; start it in one click, or schedule it.
 - **Background runs.** Hand off research or prep work. A run investigates and drafts, asks you before doing anything outside its read-only list, and pings you when it's ready. You can continue it as a normal session.
 
 macOS only.
@@ -86,13 +87,30 @@ The rules you saved with **Always allow** are listed in Settings under **Also al
 
 Each run uses your Claude plan like any other Claude Code session.
 
+## Workflows
+
+A workflow is a saved session for work you repeat: a folder, a first message (often a skill, such as `/plugin:release`), and the blanks it asks you for each time.
+
+![A workflow, prepared in the background and ready to continue](docs/screenshots/workflow.png)
+
+- **Start** opens a short form with the blanks, filled with last time's values, and a preview of the message. Enter opens the session, as if you had typed it.
+- **Blanks** in the first message: `{{name}}` is a text field, `{{name=default}}` one with a default, and `{{name?text}}` a switch that adds `text` when it's on.
+- **History** lists the sessions and runs it started.
+- **Save as workflow:** right-click a session or a background run to turn it into one.
+- **Schedule** it for some days at a time. When it's due, Stroll either reminds you, or first runs the **prep message** in the background and tells you when it's ready. The prep message is the read-only half, such as a dry run; you continue it in a session to do the rest.
+  - It fires only while Stroll is open. A time missed while Stroll was closed shows up as missed; it doesn't run late.
+- **Skills in background runs:** runs load none of your settings, so Stroll turns on just the plugin a `/plugin:skill` message needs, and points a run at a personal skill's `SKILL.md`. A skill that runs shell steps asks you for each one unless the workflow allows everything.
+- **Importing:** put a JSON list of workflows in `~/.stroll/workflows-import.json`. Stroll reads it at launch and renames it.
+
+![Starting a workflow](docs/screenshots/workflow-start.png)
+
 ## Data
 
 Everything Stroll keeps is in `~/.stroll`, readable only by you:
 
 | File | What it holds |
 | --- | --- |
-| `state.json` | To-dos, sessions and runs |
+| `state.json` | To-dos, sessions, runs and workflows |
 | `config.json` | Only the settings you changed in Settings |
 | `runs/*.jsonl` | The raw output of each background run (deleted with the run) |
 | `stroll.log` | The app log |

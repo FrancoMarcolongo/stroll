@@ -107,7 +107,7 @@ class Sessions extends EventEmitter {
 
   isLive(id) { return this.live.has(id); }
 
-  create({ cwd, title, todoIds = [], resumeId = null, firstMessage = null, cols = 120, rows = 34 }) {
+  create({ cwd, title, todoIds = [], resumeId = null, firstMessage = null, workflowId = null, cols = 120, rows = 34 }) {
     if (!this.config.claudePath) {
       throw new Error('Claude Code (`claude`) was not found on your PATH. Install it from https://claude.com/claude-code, then restart Stroll.');
     }
@@ -167,6 +167,8 @@ class Sessions extends EventEmitter {
       restorable: false,
       lastActivityAt: new Date().toISOString(),
       todoIds: allTodoIds,
+      firstMessage: existing?.firstMessage || (firstMessage && firstMessage.trim()) || null,
+      workflowId: workflowId || existing?.workflowId || null,
     });
     for (const t of allTodoIds) this.store.linkSession(id, t, false);
     this.store.rememberDir(dir);

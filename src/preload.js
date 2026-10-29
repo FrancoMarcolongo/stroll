@@ -5,6 +5,8 @@ const INVOKE = new Set([
   'session:create', 'session:buffer', 'session:kill', 'session:forget', 'session:rename', 'session:link',
   'session:clearRestorable', 'session:markRead', 'session:mute', 'sessions:clearClosed',
   'run:markRead', 'run:decide', 'run:allowAll', 'run:events', 'run:cancel', 'run:reviewed', 'run:forget', 'runs:clearFinished',
+  'workflow:add', 'workflow:update', 'workflow:delete', 'workflow:start', 'workflow:prepare', 'workflow:dismiss',
+  'workflow:render', 'workflow:fromSession', 'workflow:fromRun',
   'recent:list', 'dialog:pickDir', 'open:external', 'config:set', 'app:checkUpdates', 'app:applyUpdate',
 ]);
 const SEND = new Set(['session:write', 'session:resize', 'session:interrupt', 'ui:focus']);

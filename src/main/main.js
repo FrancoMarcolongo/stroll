@@ -13,7 +13,8 @@ const { Sessions } = require('./sessions');
 const { Runs } = require('./runs');
 const { Approvals } = require('./approvals');
 const { Server, writeHookSettings, writeMcpConfig } = require('./server');
-const { recentSessions } = require('./recent');
+const { recentSessions, firstPrompt } = require('./recent');
+const { parseFields, renderTemplate, dueSlot, nextSlot, validSchedule } = require('./workflows');
 
 app.setName('Stroll');
 // A separate data folder (tests, experiments) gets its own Electron profile, so it can run
@@ -76,7 +77,9 @@ function updateBadge() {
   const s = store.state;
   const waiting = s.sessions.filter(x => x.live && (x.status === 'waiting' || (x.status === 'idle' && x.unseen))).length;
   const ready = s.runs.filter(r => (r.unseen && r.status !== 'running') || r.pendingApproval).length;
-  const total = waiting + ready;
+  // A prepared workflow counts through its run.
+  const due = s.workflows.filter(w => w.due && !w.due.runId).length;
+  const total = waiting + ready + due;
   app.dock?.setBadge(total ? String(total) : '');
 }
 
@@ -92,6 +95,96 @@ function startHandoff(todoIds, { instructions = '', prompt = null, cwd = null, t
     todoIds,
     allowAll,
   });
+}
+
+// ---------- workflows ----------
+const WORKFLOW_GRACE_MS = 15 * 60 * 1000; // a scheduled time missed by more than this was missed
+const WORKFLOW_KEYS = ['name', 'cwd', 'mode', 'template', 'prepareTemplate', 'values', 'runAllowAll', 'schedule'];
+const shortDate = () => new Date().toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+const slotLabel = iso => new Date(iso).toLocaleString(undefined, { weekday: 'short', hour: '2-digit', minute: '2-digit' });
+
+// Only known fields, and a schedule that makes sense, from the renderer or an import file.
+function cleanWorkflow(fields = {}) {
+  const w = {};
+  for (const k of WORKFLOW_KEYS) if (k in fields) w[k] = fields[k];
+  if ('mode' in w) w.mode = w.mode === 'run' ? 'run' : 'session';
+  if ('runAllowAll' in w) w.runAllowAll = Boolean(w.runAllowAll);
+  if ('schedule' in w) {
+    w.schedule = validSchedule(w.schedule)
+      ? { days: [...new Set(w.schedule.days.map(Number))].sort(), time: w.schedule.time, action: w.schedule.action === 'prepare' ? 'prepare' : 'remind' }
+      : null;
+    // A time that already passed today shouldn't fire the moment it's set.
+    w.scheduleSetAt = new Date().toISOString();
+    w.nextAt = w.schedule ? new Date(nextSlot(w.schedule, Date.now())).toISOString() : null;
+  }
+  return w;
+}
+
+// Starts a workflow with the values from its start form, which are kept for next time.
+function startWorkflow(id, values = {}) {
+  const wf = store.workflow(id);
+  if (!wf) throw new Error('That workflow no longer exists.');
+  const vals = { ...wf.values, ...values };
+  const text = renderTemplate(wf.template, vals);
+  if (!text) throw new Error('This workflow has no first message yet. Add one under Setup.');
+  store.updateWorkflow(id, { values: vals, due: null, lastStartedAt: new Date().toISOString() });
+  const title = `${wf.name} · ${shortDate()}`;
+  if (wf.mode === 'run') return { type: 'run', id: runs.start({ prompt: text, cwd: wf.cwd, title, workflowId: id, allowAll: wf.runAllowAll }) };
+  return { type: 'session', id: sessions.create({ cwd: wf.cwd, title, firstMessage: text, workflowId: id }) };
+}
+
+// The read-only half as a background run, to continue in a session once it's ready.
+function prepareWorkflow(id, at = new Date().toISOString(), scheduled = false) {
+  const wf = store.workflow(id);
+  if (!wf) throw new Error('That workflow no longer exists.');
+  const text = renderTemplate(wf.prepareTemplate || wf.template, wf.values);
+  if (!text) throw new Error('This workflow has no first message yet. Add one under Setup.');
+  const runId = runs.start({ prompt: text, cwd: wf.cwd, title: `${wf.name} · prepared ${shortDate()}`, workflowId: id, allowAll: wf.runAllowAll });
+  store.updateWorkflow(id, { due: { at, missed: false, runId, scheduled } });
+  return { type: 'run', id: runId };
+}
+
+function checkWorkflows() {
+  const nowMs = Date.now();
+  for (const wf of store.state.workflows) {
+    const next = wf.schedule ? new Date(nextSlot(wf.schedule, nowMs)).toISOString() : null;
+    if ((wf.nextAt || null) !== next) store.updateWorkflow(wf.id, { nextAt: next });
+    const due = dueSlot(wf, nowMs, WORKFLOW_GRACE_MS);
+    if (!due) continue;
+    const at = new Date(due.at).toISOString();
+    const view = { type: 'workflow', id: wf.id };
+    store.updateWorkflow(wf.id, { lastSlotAt: at });
+    if (due.missed) {
+      store.updateWorkflow(wf.id, { due: { at, missed: true } });
+      notify(`Missed: ${wf.name}`, `It was due ${slotLabel(at)}, while Stroll was closed.`, view);
+    } else if (wf.schedule.action === 'prepare') {
+      try {
+        prepareWorkflow(wf.id, at, true);
+      } catch (e) {
+        store.updateWorkflow(wf.id, { due: { at, missed: false, error: e.message } });
+        notify(`${wf.name} couldn't start`, e.message, view);
+      }
+    } else {
+      store.updateWorkflow(wf.id, { due: { at, missed: false } });
+      notify(`${wf.name} is due`, 'Open it to start.', view);
+    }
+  }
+}
+
+// One-time import: a list of workflows in ~/.stroll/workflows-import.json, renamed once read.
+function importWorkflows() {
+  const file = path.join(paths.dataDir, 'workflows-import.json');
+  if (!fs.existsSync(file)) return;
+  try {
+    const list = JSON.parse(fs.readFileSync(file, 'utf8'));
+    for (const w of Array.isArray(list) ? list : []) {
+      if (!w?.name || store.state.workflows.some(x => x.name === w.name)) continue;
+      store.addWorkflow(cleanWorkflow(w));
+    }
+    fs.renameSync(file, `${file}.imported`);
+  } catch (e) {
+    console.error('[stroll] workflows-import.json:', e.message);
+  }
 }
 
 function checkReminders() {
@@ -321,13 +414,35 @@ function registerIpc() {
     runs.cancel(id);
     approvals.denyAllFor(id, 'The run was cancelled.');
   });
-  handle('run:reviewed', id => store.patchRun(id, { status: 'reviewed', unseen: false }));
+  handle('run:reviewed', id => {
+    store.patchRun(id, { status: 'reviewed', unseen: false });
+    // Continuing a prepared workflow's run is starting that workflow.
+    for (const w of store.state.workflows) if (w.due?.runId === id) store.updateWorkflow(w.id, { due: null, lastStartedAt: new Date().toISOString() });
+  });
   handle('run:forget', id => { store.forgetRuns([id]); runs.deleteFiles([id]); });
   handle('runs:clearFinished', () => {
     const ids = store.state.runs.filter(r => r.status !== 'running' && !r.unseen).map(r => r.id);
     store.forgetRuns(ids);
     runs.deleteFiles(ids);
     return ids.length;
+  });
+
+  handle('workflow:add', fields => store.addWorkflow({ cwd: config.defaultCwd, ...cleanWorkflow(fields) }));
+  handle('workflow:update', (id, patch) => store.updateWorkflow(id, cleanWorkflow(patch)));
+  handle('workflow:delete', id => store.deleteWorkflow(id));
+  handle('workflow:start', (id, values) => startWorkflow(id, values));
+  handle('workflow:prepare', id => prepareWorkflow(id));
+  handle('workflow:dismiss', id => store.updateWorkflow(id, { due: null }));
+  handle('workflow:render', (template, values) => ({ fields: parseFields(template), text: renderTemplate(template, values) }));
+  handle('workflow:fromSession', id => {
+    const s = store.session(id);
+    if (!s) return null;
+    const template = s.firstMessage || firstPrompt(s.claudeSessionId || s.id) || '';
+    return store.addWorkflow({ name: (s.title || 'New workflow').replace(/ · .*$/, ''), cwd: s.cwd, template });
+  });
+  handle('workflow:fromRun', id => {
+    const r = store.run(id);
+    return r ? store.addWorkflow({ name: r.title.replace(/ · .*$/, ''), cwd: r.cwd, mode: 'run', template: r.prompt, runAllowAll: Boolean(r.allowAll) }) : null;
   });
 
   handle('recent:list', () => {
@@ -418,8 +533,9 @@ async function boot() {
   buildMenu();
   createWindow();
   updateBadge();
-  setInterval(checkReminders, 30 * 1000);
-  setTimeout(checkReminders, 3000);
+  importWorkflows();
+  setInterval(() => { checkReminders(); checkWorkflows(); }, 30 * 1000);
+  setTimeout(() => { checkReminders(); checkWorkflows(); }, 3000);
   setTimeout(checkUpdates, 15 * 1000);
   setInterval(checkUpdates, 6 * 60 * 60 * 1000);
 }
