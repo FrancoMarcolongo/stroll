@@ -1,7 +1,7 @@
 const { app, BrowserWindow, ipcMain, dialog, shell, Notification, Menu, nativeImage } = require('electron');
 const path = require('path');
 const fs = require('fs');
-const { pathToFileURL } = require('url');
+const { pathToFileURL, fileURLToPath } = require('url');
 const { execFile } = require('child_process');
 
 const ICON_PATH = path.join(__dirname, '..', '..', 'assets', 'icon.png');
@@ -466,8 +466,22 @@ function registerIpc() {
     const r = await dialog.showOpenDialog(win, { properties: ['openDirectory'], defaultPath: start || config.defaultCwd });
     return r.canceled ? null : r.filePaths[0];
   });
-  handle('open:external', url => { if (/^https?:\/\//i.test(url)) shell.openExternal(url); });
+  handle('open:external', url => openLink(url));
   on('ui:focus', view => { focusView = view; if (win?.isFocused()) markSeen(view); });
+}
+
+const ZED = '/opt/homebrew/bin/zed';
+
+// http(s) goes to the browser; file:// opens in Zed, jumping to the line in a #42 or #L42 fragment.
+function openLink(url) {
+  if (/^https?:\/\//i.test(url)) return shell.openExternal(url);
+  if (!/^file:\/\//i.test(url)) return;
+  const u = new URL(url);
+  const line = u.hash.match(/^#L?(\d+)$/)?.[1];
+  u.hash = '';
+  const file = fileURLToPath(u);
+  if (fs.existsSync(ZED)) execFile(ZED, [line ? `${file}:${line}` : file]);
+  else shell.openPath(file);
 }
 
 async function boot() {

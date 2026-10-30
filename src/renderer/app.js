@@ -301,6 +301,8 @@ function ensureTerm(id) {
     theme: THEME,
     macOptionClickForcesSelection: true,
     macOptionIsMeta: cfg.optionIsMeta === true,
+    // OSC 8 hyperlinks (Claude's markdown links), including file:// ones.
+    linkHandler: { activate: (_e, uri) => api.invoke('open:external', uri), allowNonHttpProtocols: true },
   });
   const fit = new FitAddon.FitAddon();
   term.loadAddon(fit);

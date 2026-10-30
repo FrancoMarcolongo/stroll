@@ -139,6 +139,8 @@ class Sessions extends EventEmitter {
         env: childEnv(this.config, {
           TERM: 'xterm-256color',
           COLORTERM: 'truecolor',
+          // xterm.js renders OSC 8 hyperlinks, but Claude can't detect that from TERM alone.
+          FORCE_HYPERLINK: '1',
           STROLL_SESSION: id,
           STROLL_PORT: String(this.server.port),
           STROLL_TOKEN: this.server.token,
