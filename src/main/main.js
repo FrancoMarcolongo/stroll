@@ -7,6 +7,11 @@ const { execFile } = require('child_process');
 const ICON_PATH = path.join(__dirname, '..', '..', 'assets', 'icon.png');
 const INDEX_PATH = path.join(__dirname, '..', 'renderer', 'index.html');
 const INDEX_URL = pathToFileURL(INDEX_PATH).href;
+const IS_MAC = process.platform === 'darwin';
+// App shortcuts: ⌘ on macOS. Elsewhere plain Ctrl keys belong to Claude Code in the terminal
+// (Ctrl+K, Ctrl+J, Ctrl+N…), so they take Ctrl+Shift, as terminal apps do for Ctrl+Shift+C/V.
+// There the page handles them (app.js), and the menu only shows them.
+const appKey = k => (IS_MAC ? { accelerator: `Cmd+${k}` } : { accelerator: `Ctrl+Shift+${k}`, registerAccelerator: false });
 const { paths, loadConfig, saveOverrides, mergeDeep, findOnPath } = require('./config');
 const { Store } = require('./store');
 const { Sessions } = require('./sessions');
@@ -256,8 +261,9 @@ function createWindow() {
     title: 'Stroll',
     icon: ICON_PATH,
     backgroundColor: '#0e1116',
-    titleBarStyle: 'hiddenInset',
-    trafficLightPosition: { x: 14, y: 14 },
+    ...(IS_MAC
+      ? { titleBarStyle: 'hiddenInset', trafficLightPosition: { x: 14, y: 14 } }
+      : { autoHideMenuBar: true }), // Alt shows the menu bar
     webPreferences: {
       preload: path.join(__dirname, '..', 'preload.js'),
       contextIsolation: true,
@@ -329,30 +335,41 @@ function buildMenu() {
       label: app.name,
       submenu: [
         { role: 'about' },
-        { label: 'Settings…', accelerator: 'CmdOrCtrl+,', click: () => send('ui:command', 'settings') },
+        { label: 'Settings…', ...appKey(','), click: () => send('ui:command', 'settings') },
         { label: 'Check for Updates…', click: () => checkUpdates().then(() => send('ui:command', updateInfo ? 'show-update' : 'up-to-date')) },
         { type: 'separator' },
-        { role: 'services' }, { type: 'separator' },
-        { role: 'hide' }, { role: 'hideOthers' }, { role: 'unhide' }, { type: 'separator' },
+        ...(IS_MAC ? [
+          { role: 'services' }, { type: 'separator' },
+          { role: 'hide' }, { role: 'hideOthers' }, { role: 'unhide' }, { type: 'separator' },
+        ] : []),
         { role: 'quit' },
       ],
     },
     {
       label: 'File',
       submenu: [
-        { label: 'New Session', accelerator: 'CmdOrCtrl+N', click: () => send('ui:command', 'new-session') },
-        { label: 'Add To-do', accelerator: 'CmdOrCtrl+K', click: () => send('ui:command', 'quick-add') },
-        { label: 'Overview', accelerator: 'CmdOrCtrl+0', click: () => send('ui:command', 'home') },
-        { label: 'Next Needing You', accelerator: 'CmdOrCtrl+J', click: () => send('ui:command', 'next-needs') },
+        { label: 'New Session', ...appKey('N'), click: () => send('ui:command', 'new-session') },
+        { label: 'Add To-do', ...appKey('K'), click: () => send('ui:command', 'quick-add') },
+        { label: 'Overview', ...appKey('0'), click: () => send('ui:command', 'home') },
+        { label: 'Next Needing You', ...appKey('J'), click: () => send('ui:command', 'next-needs') },
         { type: 'separator' },
-        { role: 'close' },
+        // Ctrl+W deletes a word in Claude Code's prompt.
+        IS_MAC ? { role: 'close' } : { role: 'close', accelerator: 'Ctrl+Shift+W' },
       ],
     },
-    { role: 'editMenu' },
+    // Off macOS, Ctrl+C/V/X/Z/A belong to Claude Code in the terminal (interrupt, image paste…):
+    // the Edit menu only shows them. Text fields handle them on their own, the terminal uses
+    // Ctrl+Shift+C/V.
+    IS_MAC ? { role: 'editMenu' } : {
+      label: 'Edit',
+      submenu: ['undo', 'redo', null, 'cut', 'copy', 'paste', null, 'selectAll']
+        .map(role => (role ? { role, registerAccelerator: false } : { type: 'separator' })),
+    },
     {
       label: 'View',
       submenu: [
-        { role: 'reload' }, { role: 'toggleDevTools' }, { type: 'separator' },
+        // Ctrl+R is Claude Code's history search.
+        IS_MAC ? { role: 'reload' } : { role: 'reload', accelerator: 'Ctrl+Shift+R' }, { role: 'toggleDevTools' }, { type: 'separator' },
         { role: 'resetZoom' }, { role: 'zoomIn' }, { role: 'zoomOut' }, { type: 'separator' }, { role: 'togglefullscreen' },
       ],
     },

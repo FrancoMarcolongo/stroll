@@ -27,6 +27,7 @@ contextBridge.exposeInMainWorld('stroll', {
     ipcRenderer.on(channel, listener);
     return () => ipcRenderer.removeListener(channel, listener);
   },
+  platform: process.platform,
   // Absolute path of a file dropped on the window (File.path is gone in current Electron).
   pathForFile: file => webUtils.getPathForFile(file),
 });

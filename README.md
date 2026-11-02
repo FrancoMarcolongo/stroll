@@ -7,16 +7,16 @@ A desktop session manager for [Claude Code](https://claude.com/claude-code). The
 - **Workflows for recurring work.** Save a session you run every week (a release, a ticket sync) with the blanks it needs; start it in one click, or schedule it.
 - **Background runs.** Hand off research or prep work. A run investigates and drafts, asks you before doing anything outside its read-only list, and pings you when it's ready. You can continue it as a normal session.
 
-macOS only.
+macOS and Linux.
 
 ![The overview: what needs you, what's in progress, and your to-dos](docs/screenshots/overview.png)
 
 ## Install
 
 You need:
-- macOS
+- macOS or Linux
 - Node.js 20 or newer (`node -v`)
-- Xcode Command Line Tools (`xcode-select --install`)
+- To build the terminal module: on macOS, Xcode Command Line Tools (`xcode-select --install`); on Linux, a C++ compiler, make and Python (Fedora: `sudo dnf install gcc-c++ make python3`, Debian/Ubuntu: `sudo apt install build-essential python3`)
 - Claude Code, installed and logged in once in a terminal (`claude`)
 
 ```sh
@@ -40,17 +40,20 @@ Restarting ends open sessions. When Stroll comes back, **Resume all** brings the
 
 ![A live Claude Code session, with to-dos, sessions and background runs in the sidebar](docs/screenshots/session.png)
 
-| | |
-| --- | --- |
-| ⌘K | Add a to-do |
-| ⌘N | New session |
-| ⌘J | Jump to the next thing that needs you |
-| ⌘0 | Overview |
-| ⌘1–9 | Jump to a live session |
-| Ctrl+Tab | Next live session (Ctrl+Shift+Tab: previous) |
-| ⌘, | Settings |
-| Shift+Enter | New line in Claude's prompt |
-| Esc | Interrupt Claude (as in the terminal) |
+| macOS | Linux | |
+| --- | --- | --- |
+| ⌘K | Ctrl+Shift+K | Add a to-do |
+| ⌘N | Ctrl+Shift+N | New session |
+| ⌘J | Ctrl+Shift+J | Jump to the next thing that needs you |
+| ⌘0 | Ctrl+Shift+0 | Overview |
+| ⌘1–9 | Ctrl+Shift+1–9 | Jump to a live session |
+| Ctrl+Tab | Ctrl+Tab | Next live session (Ctrl+Shift+Tab: previous) |
+| ⌘, | Ctrl+Shift+, | Settings |
+| ⌘C / ⌘V | Ctrl+Shift+C / Ctrl+Shift+V | Copy the selection / paste, in a session |
+| Shift+Enter | Shift+Enter | New line in Claude's prompt |
+| Esc | Esc | Interrupt Claude (as in the terminal) |
+
+On Linux, plain Ctrl keys (Ctrl+K, Ctrl+J, Ctrl+R, Ctrl+V…) go to Claude Code, as in a terminal, so Stroll's own shortcuts add Shift. Elsewhere in this README, read ⌘ as Ctrl on Linux (⌘-click is Ctrl-click). Closing the window quits Stroll there; **Resume all** brings sessions back.
 
 - **To-dos:** **Start** opens a session for the to-do. **Hand off** sends it to a background run. While one is going, **Go to** opens it instead of starting another. ⌘-click several to start or hand off them together. Reminders fire as notifications. Marking a to-do done while it has open sessions asks whether to end them.
 - **Inside a session started from Stroll,** Claude can manage your list: "add a to-do to …", "hand this off", "what's on my list?". That's the `stroll` MCP server.

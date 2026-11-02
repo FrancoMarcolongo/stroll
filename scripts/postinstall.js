@@ -7,7 +7,7 @@ const path = require('path');
 
 const root = path.join(__dirname, '..');
 execSync('npx --no-install electron-rebuild -f -w node-pty', { cwd: root, stdio: 'inherit' });
-for (const dir of ['build/Release', 'prebuilds/darwin-arm64', 'prebuilds/darwin-x64']) {
+for (const dir of ['build/Release', 'prebuilds/darwin-arm64', 'prebuilds/darwin-x64', 'prebuilds/linux-x64', 'prebuilds/linux-arm64']) {
   const helper = path.join(root, 'node_modules', 'node-pty', dir, 'spawn-helper');
   if (fs.existsSync(helper)) fs.chmodSync(helper, 0o755);
 }
