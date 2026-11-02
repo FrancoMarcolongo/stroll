@@ -141,9 +141,9 @@ function mergedPath() {
   return [...new Set(parts)].join(':');
 }
 
-function findClaude(envPath) {
+function findOnPath(name, envPath) {
   for (const dir of envPath.split(':')) {
-    const candidate = path.join(dir, 'claude');
+    const candidate = path.join(dir, name);
     try { fs.accessSync(candidate, fs.constants.X_OK); return candidate; } catch (_) { /* keep looking */ }
   }
   return null;
@@ -198,7 +198,7 @@ function loadConfig() {
   }
   const config = mergeDeep(DEFAULT_CONFIG, overrides);
   config.envPath = mergedPath();
-  config.claudePath = overrides.claudePath || findClaude(config.envPath);
+  config.claudePath = overrides.claudePath || findOnPath('claude', config.envPath);
   if (!config.defaultCwd || !fs.existsSync(config.defaultCwd)) config.defaultCwd = HOME;
   return config;
 }
@@ -212,4 +212,4 @@ function saveOverrides(patch) {
   return next;
 }
 
-module.exports = { paths, loadConfig, saveOverrides, childEnv, backgroundTools, writePrivate, mergeDeep, DEFAULT_CONFIG, HOME };
+module.exports = { paths, loadConfig, saveOverrides, childEnv, backgroundTools, writePrivate, mergeDeep, findOnPath, DEFAULT_CONFIG, HOME };

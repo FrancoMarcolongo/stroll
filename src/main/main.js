@@ -7,7 +7,7 @@ const { execFile } = require('child_process');
 const ICON_PATH = path.join(__dirname, '..', '..', 'assets', 'icon.png');
 const INDEX_PATH = path.join(__dirname, '..', 'renderer', 'index.html');
 const INDEX_URL = pathToFileURL(INDEX_PATH).href;
-const { paths, loadConfig, saveOverrides, mergeDeep } = require('./config');
+const { paths, loadConfig, saveOverrides, mergeDeep, findOnPath } = require('./config');
 const { Store } = require('./store');
 const { Sessions } = require('./sessions');
 const { Runs } = require('./runs');
@@ -470,18 +470,29 @@ function registerIpc() {
   on('ui:focus', view => { focusView = view; if (win?.isFocused()) markSeen(view); });
 }
 
-const ZED = '/opt/homebrew/bin/zed';
-
-// http(s) goes to the browser; file:// opens in Zed, jumping to the line in a #42 or #L42 fragment.
+// http(s) goes to the browser. file:// opens in Zed when it's on the PATH, at the line from a
+// #42 or #L42 fragment. Without Zed a file is shown, never run: a link's text can say anything,
+// and opening a .command or .app with its default app would launch it. So macOS opens it in
+// the text editor, and directories (and everything on other systems) are revealed instead.
 function openLink(url) {
   if (/^https?:\/\//i.test(url)) return shell.openExternal(url);
-  if (!/^file:\/\//i.test(url)) return;
-  const u = new URL(url);
-  const line = u.hash.match(/^#L?(\d+)$/)?.[1];
-  u.hash = '';
-  const file = fileURLToPath(u);
-  if (fs.existsSync(ZED)) execFile(ZED, [line ? `${file}:${line}` : file]);
-  else shell.openPath(file);
+  if (!/^file:\/\//i.test(url)) return undefined;
+  let file; let line;
+  try {
+    const u = new URL(url);
+    line = u.hash.match(/^#L?(\d+)$/)?.[1];
+    u.hash = '';
+    file = fileURLToPath(u);
+  } catch (_) {
+    return undefined; // malformed, or a file:// link to another host
+  }
+  if (!fs.existsSync(file)) return undefined;
+  const zed = findOnPath('zed', config.envPath);
+  const done = () => {};
+  if (zed) execFile(zed, [line ? `${file}:${line}` : file], done);
+  else if (process.platform === 'darwin' && fs.statSync(file).isFile()) execFile('open', ['-t', file], done);
+  else shell.showItemInFolder(file);
+  return undefined;
 }
 
 async function boot() {
