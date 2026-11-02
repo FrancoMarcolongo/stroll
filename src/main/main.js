@@ -357,7 +357,14 @@ function buildMenu() {
         IS_MAC ? { role: 'close' } : { role: 'close', accelerator: 'Ctrl+Shift+W' },
       ],
     },
-    { role: 'editMenu' },
+    // Off macOS, Ctrl+C/V/X/Z/A belong to Claude Code in the terminal (interrupt, image paste…):
+    // the Edit menu only shows them. Text fields handle them on their own, the terminal uses
+    // Ctrl+Shift+C/V.
+    IS_MAC ? { role: 'editMenu' } : {
+      label: 'Edit',
+      submenu: ['undo', 'redo', null, 'cut', 'copy', 'paste', null, 'selectAll']
+        .map(role => (role ? { role, registerAccelerator: false } : { type: 'separator' })),
+    },
     {
       label: 'View',
       submenu: [
