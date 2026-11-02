@@ -2,6 +2,23 @@
 const api = window.stroll;
 const $ = sel => document.querySelector(sel);
 
+const IS_MAC = api.platform === 'darwin';
+document.documentElement.dataset.platform = api.platform;
+// App shortcuts: ⌘ on macOS. Elsewhere plain Ctrl keys belong to Claude Code in the terminal,
+// so they take Ctrl+Shift (as in the menu, see main.js).
+const appKey = e => (IS_MAC ? e.metaKey && !e.ctrlKey : e.ctrlKey && e.shiftKey && !e.metaKey) && !e.altKey;
+// The modifier for ⌘-click and ⌘↩ in dialogs: ⌘ on macOS, Ctrl elsewhere.
+const cmdKey = e => (IS_MAC ? e.metaKey : e.ctrlKey);
+// Keys the terminal leaves to the app: any ⌘ combination on macOS, the app shortcuts elsewhere.
+const appOwnsKey = e => (IS_MAC ? e.metaKey : appKey(e));
+const APP_KEY = IS_MAC ? '⌘' : 'Ctrl+Shift+';
+const SUBMIT_KEY = IS_MAC ? '⌘↩' : 'Ctrl+Enter';
+// index.html's shortcut hints are written with ⌘.
+if (!IS_MAC) {
+  for (const el of document.querySelectorAll('[title*="⌘"]')) el.title = el.title.replaceAll('⌘', APP_KEY);
+  for (const el of document.querySelectorAll('kbd')) el.textContent = el.textContent.replaceAll('⌘', APP_KEY);
+}
+
 const S = {
   data: null,
   view: { type: 'home', id: null },
@@ -22,7 +39,7 @@ const THEME = {
 
 // ---------- helpers ----------
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-const shortDir = d => (d ? d.replace(/^\/Users\/[^/]+/, '~') : '');
+const shortDir = d => (d ? d.replace(/^\/(Users|home)\/[^/]+/, '~') : '');
 function ago(iso) {
   if (!iso) return '';
   const s = Math.max(0, (Date.now() - new Date(iso).getTime()) / 1000);
@@ -314,13 +331,15 @@ function ensureTerm(id) {
   term.onData(d => { if (!entry.replaying) api.send('session:write', id, d); });
   term.onBinary(d => { if (!entry.replaying) api.send('session:write', id, d); });
   term.attachCustomKeyEventHandler(ev => {
-    if (ev.type !== 'keydown') return !ev.metaKey;
+    if (ev.type !== 'keydown') return !appOwnsKey(ev);
     // Claude Code sends no hook when a turn is interrupted; tell Stroll so the dot settles.
     if (ev.key === 'Escape') api.send('session:interrupt', id);
     // Shift+Enter → newline in Claude Code's prompt (same sequence /terminal-setup configures).
     if (ev.key === 'Enter' && ev.shiftKey && !ev.metaKey && !ev.ctrlKey && !ev.altKey) { ev.preventDefault(); api.send('session:write', id, '\x1b\r'); return false; }
-    if (ev.metaKey && ev.key === 'c' && term.hasSelection()) { navigator.clipboard.writeText(term.getSelection()); return false; }
-    return !ev.metaKey; // ⌘ shortcuts belong to the app and the menu (⌘V paste still reaches the terminal)
+    if (appOwnsKey(ev) && ev.key.toLowerCase() === 'c' && term.hasSelection()) { navigator.clipboard.writeText(term.getSelection()); return false; }
+    // App shortcuts belong to the app and the menu. ⌘V (Ctrl+Shift+V on Linux) still pastes:
+    // the browser's paste reaches the terminal. Plain Ctrl+V goes to Claude Code (image paste).
+    return !appOwnsKey(ev);
   });
   loadBuffer(id);
   return entry;
@@ -713,7 +732,7 @@ function startModal(todoIds = []) {
     <div class="field"><label>Name</label><input type="text" name="title" value="${esc(title)}" placeholder="Optional"></div>
     ${dirField(cwd)}
     <div class="field"><label>First message</label><textarea name="first" rows="3" placeholder="Optional. Leave empty to start typing in the session."></textarea></div>
-    <footer><button class="btn ghost" data-close>Cancel</button><button class="btn primary" data-go>${ICON.play}Start <kbd>⌘↩</kbd></button></footer>
+    <footer><button class="btn ghost" data-close>Cancel</button><button class="btn primary" data-go>${ICON.play}Start <kbd>${SUBMIT_KEY}</kbd></button></footer>
   `, (m, close) => {
     const cwdInput = wireDirField(m);
     const go = async () => {
@@ -731,7 +750,7 @@ function startModal(todoIds = []) {
     };
     m.querySelector('[data-go]').addEventListener('click', go);
     m.querySelector('[data-close]').addEventListener('click', close);
-    m.addEventListener('keydown', e => { if (e.key === 'Enter' && e.metaKey) go(); if (e.key === 'Escape') close(); });
+    m.addEventListener('keydown', e => { if (e.key === 'Enter' && cmdKey(e)) go(); if (e.key === 'Escape') close(); });
     m.querySelector(todos.length ? '[name=first]' : '[name=title]').focus();
   });
 }
@@ -745,7 +764,7 @@ function handoffModal(todoIds) {
     <div class="field"><label>Instructions</label><textarea name="instructions" rows="5" placeholder="Optional. What should it look at, what should the draft be?"></textarea></div>
     ${dirField(cwd)}
     ${toggle('handoff-allow-all', false, 'Allow everything it asks for', ALLOW_ALL_HELP)}
-    <footer><button class="btn ghost" data-close>Cancel</button><button class="btn primary" data-go>${ICON.handoff}Hand off <kbd>⌘↩</kbd></button></footer>
+    <footer><button class="btn ghost" data-close>Cancel</button><button class="btn primary" data-go>${ICON.handoff}Hand off <kbd>${SUBMIT_KEY}</kbd></button></footer>
   `, (m, close) => {
     const cwdInput = wireDirField(m);
     const go = async () => {
@@ -764,7 +783,7 @@ function handoffModal(todoIds) {
     };
     m.querySelector('[data-go]').addEventListener('click', go);
     m.querySelector('[data-close]').addEventListener('click', close);
-    m.addEventListener('keydown', e => { if (e.key === 'Enter' && e.metaKey) go(); if (e.key === 'Escape') close(); });
+    m.addEventListener('keydown', e => { if (e.key === 'Enter' && cmdKey(e)) go(); if (e.key === 'Escape') close(); });
     m.querySelector('[name=instructions]').focus();
   });
 }
@@ -995,7 +1014,7 @@ document.addEventListener('click', async e => {
 
   if (rowEl) {
     const { kind, id } = rowEl.dataset;
-    if (kind === 'todo' && (e.metaKey || e.shiftKey)) {
+    if (kind === 'todo' && (cmdKey(e) || e.shiftKey)) {
       if (S.selected.has(id)) S.selected.delete(id); else S.selected.add(id);
       return renderSidebar();
     }
@@ -1184,14 +1203,21 @@ window.addEventListener('keydown', e => {
     if (S.data) cycleSessions(e.shiftKey ? -1 : 1);
     return;
   }
-  if (!e.metaKey || e.altKey || e.ctrlKey) return;
-  if (/^[1-9]$/.test(e.key)) {
-    const s = liveSessions()[Number(e.key) - 1];
+  if (!appKey(e)) return;
+  // Off macOS the menu doesn't take its shortcuts (see main.js): run them here.
+  const cmd = !IS_MAC && LINUX_SHORTCUTS[e.code];
+  if (cmd) { e.preventDefault(); e.stopPropagation(); runCommand(cmd); return; }
+  // e.code: with Shift held (Linux), e.key is "!", "@"…
+  const digit = IS_MAC ? e.key : e.code.replace(/^Digit/, '');
+  if (/^[1-9]$/.test(digit)) {
+    const s = liveSessions()[Number(digit) - 1];
     if (s) { e.preventDefault(); e.stopPropagation(); navigate({ type: 'session', id: s.id }); }
   }
 }, true);
 
-api.on('ui:command', cmd => {
+const LINUX_SHORTCUTS = { KeyN: 'new-session', KeyK: 'quick-add', Digit0: 'home', KeyJ: 'next-needs', Comma: 'settings' };
+
+function runCommand(cmd) {
   if (cmd === 'quick-add') { $('#quick-add-input').focus(); $('#quick-add-input').select(); }
   if (cmd === 'new-session') startModal([]);
   if (cmd === 'home') navigate({ type: 'home' });
@@ -1199,7 +1225,8 @@ api.on('ui:command', cmd => {
   if (cmd === 'next-needs') nextNeedingYou();
   if (cmd === 'show-update') renderBanner();
   if (cmd === 'up-to-date') flash('Stroll is up to date');
-});
+}
+api.on('ui:command', runCommand);
 let pendingView = null; // navigation requested (e.g. a notification click) before init finished
 api.on('ui:navigate', view => { if (S.data) navigate(view); else pendingView = view; });
 api.on('ui:window-focus', f => { S.windowFocused = f; });
@@ -1468,7 +1495,7 @@ async function startWorkflowModal(id) {
     m.querySelector('[data-go]').addEventListener('click', go);
     m.querySelector('[data-close]').addEventListener('click', close);
     m.addEventListener('keydown', e => {
-      if (e.key === 'Enter' && (e.metaKey || e.target.type === 'text')) { e.preventDefault(); go(); }
+      if (e.key === 'Enter' && (cmdKey(e) || e.target.type === 'text')) { e.preventDefault(); go(); }
       if (e.key === 'Escape') close();
     });
     (m.querySelector('input[type=text]') || m.querySelector('[data-go]')).focus();
@@ -1495,7 +1522,7 @@ function renderSettings(header, panel) {
         <div><label>Font size</label><input type="number" id="set-font-size" min="9" max="24" value="${Number(c.terminal.fontSize) || 13}"></div>
         <div><label>Font</label><input type="text" id="set-font-family" value="${esc(c.terminal.fontFamily)}"></div>
       </div>
-      ${toggle('set-option-meta', c.terminal.optionIsMeta, 'Use Option as Meta', 'Enables Option+Enter and Option+arrows in Claude Code. Leave it off if you type characters such as @ or # with Option.')}
+      ${IS_MAC ? toggle('set-option-meta', c.terminal.optionIsMeta, 'Use Option as Meta', 'Enables Option+Enter and Option+arrows in Claude Code. Leave it off if you type characters such as @ or # with Option.') : ''}
     </section>
     <section class="set-group"><h3>Notifications</h3>
       ${toggle('set-n-enabled', c.notifications.enabled, 'Show notifications')}
@@ -1526,7 +1553,7 @@ function renderSettings(header, panel) {
   });
   bind('#set-font-size', 'change', e => save({ terminal: { fontSize: Math.min(24, Math.max(9, Number(e.target.value) || 13)) } }));
   bind('#set-font-family', 'change', e => save({ terminal: { fontFamily: e.target.value.trim() || 'Menlo, monospace' } }));
-  bind('#set-option-meta', 'change', e => save({ terminal: { optionIsMeta: e.target.checked } }));
+  if (IS_MAC) bind('#set-option-meta', 'change', e => save({ terminal: { optionIsMeta: e.target.checked } }));
   bind('#set-n-enabled', 'change', e => save({ notifications: { enabled: e.target.checked } }));
   bind('#set-n-sound', 'change', e => save({ notifications: { sound: e.target.checked } }));
   bind('#set-n-needs', 'change', e => save({ notifications: { needsYou: e.target.checked } }));

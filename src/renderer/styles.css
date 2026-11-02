@@ -42,6 +42,7 @@ kbd { font: 500 10.5px/1 var(--font); color: var(--text-3); background: var(--bg
 .drag-strip { -webkit-app-region: drag; }
 .drag-strip button, .drag-strip input, .drag-strip a, .drag-strip [contenteditable] { -webkit-app-region: no-drag; }
 .brand-strip { height: 46px; display: flex; align-items: center; padding: 0 14px 0 84px; flex: none; }
+:root:not([data-platform="darwin"]) .brand-strip { padding-left: 14px; } /* no traffic lights to clear */
 .brand { display: inline-flex; align-items: center; gap: 8px; font-weight: 650; font-size: 13.5px; letter-spacing: 0.2px; }
 
 .nav { padding: 2px 8px 6px; }

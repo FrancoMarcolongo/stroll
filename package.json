@@ -10,7 +10,8 @@
     "node": ">=20"
   },
   "os": [
-    "darwin"
+    "darwin",
+    "linux"
   ],
   "scripts": {
     "start": "electron .",
