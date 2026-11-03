@@ -63,6 +63,7 @@ function toLocalInput(iso) {
 const todo = id => S.data.todos.find(t => t.id === id);
 const session = id => S.data.sessions.find(s => s.id === id);
 // Live sessions in sidebar order (latest activity first); ⌘1–9 and Ctrl+Tab follow it.
+const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
 const liveSessions = () => S.data.sessions.filter(s => s.live).sort((a, b) => (b.lastActivityAt || '').localeCompare(a.lastActivityAt || ''));
 const run = id => S.data.runs.find(r => r.id === id);
 const workflow = id => (S.data.workflows || []).find(w => w.id === id);
@@ -100,15 +101,27 @@ const RUN_LABEL = { running: 'running', ready: 'ready for you', failed: 'failed'
 const sessionState = s => (s.live ? s.status || 'starting' : 'closed');
 
 // Dots only mark what's ongoing or not yet seen: green working, yellow needs you, blue your
-// turn (until you open it). Everything else, including a turn you've already looked at, has none.
-const DOT_LABEL = { working: 'working', waiting: 'needs you', idle: 'your turn' };
+// turn (until you open it), violet your turn with something still running in the background (a
+// shell, an agent, a monitor…). Everything else, including a turn you've already looked at, has none.
+const DOT_LABEL = { working: 'working', waiting: 'needs you', idle: 'your turn', bg: 'running in the background' };
 function sessionDot(s) {
   if (!s.live) return 'none';
   if (s.status === 'working') return 'working';
   if (s.status === 'waiting') return 'waiting';
   if (s.status === 'idle' && s.unseen) return 'idle';
+  if (s.background?.length) return 'bg';
   return 'none';
 }
+const BG_NOUN = { shell: ['shell', 'shells'], agent: ['agent', 'agents'], monitor: ['monitor', 'monitors'], workflow: ['workflow', 'workflows'], task: ['task', 'tasks'] };
+// "2 agents, 1 shell"
+function bgSummary(s) {
+  const counts = new Map();
+  for (const t of s.background || []) counts.set(t.kind, (counts.get(t.kind) || 0) + 1);
+  return [...counts].map(([k, n]) => `${n} ${(BG_NOUN[k] || BG_NOUN.task)[n === 1 ? 0 : 1]}`).join(', ');
+}
+const bgDetail = s => `Running in the background:\n${(s.background || []).map(t => `• ${t.label} (${(BG_NOUN[t.kind] || BG_NOUN.task)[0]})`).join('\n')}`;
+const bgBadge = s => (s.live && s.background?.length
+  ? `<span class="bg-badge" title="${esc(bgDetail(s))}">${ICON.activity}${s.background.length}</span>` : '');
 function runDot(r) {
   if (r.pendingApproval) return 'waiting';
   if (r.status === 'running') return 'working';
@@ -237,7 +250,7 @@ function todoState(t) {
   const live = t.sessionIds.map(session).filter(s => s && s.live);
   if (live.length) {
     const dots = live.map(sessionDot);
-    const tone = ['waiting', 'idle', 'working'].find(d => dots.includes(d)) || 'active';
+    const tone = ['waiting', 'idle', 'working', 'bg'].find(d => dots.includes(d)) || 'active';
     return { tone, label: tone === 'waiting' ? 'Needs you' : 'In progress', title: `${live.length} live session${live.length === 1 ? '' : 's'}` };
   }
   const runs = t.runIds.map(run).filter(Boolean);
@@ -251,7 +264,7 @@ function todoState(t) {
 function activeWork(t) {
   const live = t.sessionIds.map(session).filter(s => s && s.live);
   if (live.length) {
-    const rank = s => ({ waiting: 0, idle: 1, working: 2 }[sessionDot(s)] ?? 3);
+    const rank = s => ({ waiting: 0, idle: 1, working: 2, bg: 3 }[sessionDot(s)] ?? 4);
     live.sort((a, b) => rank(a) - rank(b) || (b.lastActivityAt || '').localeCompare(a.lastActivityAt || ''));
     return { type: 'session', id: live[0].id };
   }
@@ -283,7 +296,7 @@ function sessionRow(s) {
   const preview = s.preview || (s.live ? SESSION_LABEL[st] || st : 'closed');
   return `<li class="row ${isActive ? 'active' : ''} ${s.live ? '' : 'dim'}" data-kind="session" data-id="${esc(s.id)}" title="${esc(shortDir(s.cwd))}">
     ${dotHtml(sessionDot(s))}
-    <div class="main"><div class="title-line"><span class="title">${esc(s.title || 'Untitled session')}</span>${s.muted ? `<span class="muted-icon" title="Notifications muted">${ICON.mute}</span>` : ''}<span class="when">${ago(s.lastActivityAt)}</span></div>
+    <div class="main"><div class="title-line"><span class="title">${esc(s.title || 'Untitled session')}</span>${bgBadge(s)}${s.muted ? `<span class="muted-icon" title="Notifications muted">${ICON.mute}</span>` : ''}<span class="when">${ago(s.lastActivityAt)}</span></div>
     <div class="sub">${esc(preview)}</div></div>
   </li>`;
 }
@@ -492,7 +505,9 @@ const STATE_TITLE = { working: 'Working', waiting: 'Needs you', idle: 'Your turn
 function sessionPill(s) {
   const st = sessionState(s);
   const dot = sessionDot(s);
-  return `<span class="pill ${dot === 'none' ? 'neutral' : dot}" id="session-pill"><i></i>${STATE_TITLE[st] || st}</span>`;
+  const bg = s.live && s.background?.length;
+  const label = dot === 'bg' ? `Running ${bgSummary(s)}` : STATE_TITLE[st] || st;
+  return `<span class="pill ${dot === 'none' ? 'neutral' : dot}" id="session-pill"${bg ? ` title="${esc(bgDetail(s))}"` : ''}><i></i>${esc(label)}</span>`;
 }
 
 function updateSessionHeader() {
@@ -675,7 +690,7 @@ function renderHome(header, panel) {
     ...n.workflows.map(workflowRow),
     ...n.yourTurn.map(sessionRow),
   ];
-  const progress = [...live.filter(s => s.status === 'working' || s.status === 'starting').map(sessionRow), ...d.runs.filter(r => r.status === 'running' && !r.pendingApproval).map(runRow)];
+  const progress = [...live.filter(s => s.status === 'working' || s.status === 'starting' || sessionDot(s) === 'bg').map(sessionRow), ...d.runs.filter(r => r.status === 'running' && !r.pendingApproval).map(runRow)];
   const open = d.todos.filter(t => t.status === 'open').sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
   // Built once per visit; later state pushes only patch the counts and lists.
   if (panel.dataset.view !== 'home') {
@@ -692,7 +707,7 @@ function renderHome(header, panel) {
   }
   const empty = text => `<li class="empty">${text}</li>`;
   const today = new Date().toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' });
-  $('#ov-meta').textContent = `${today} · ${live.length} live session${live.length === 1 ? '' : 's'} · ${d.runs.filter(r => r.status === 'running').length} in the background · ${open.length} open to-do${open.length === 1 ? '' : 's'}`;
+  $('#ov-meta').textContent = `${today} · ${live.length} live session${live.length === 1 ? '' : 's'} · ${plural(d.runs.filter(r => r.status === 'running').length, 'background run')} · ${open.length} open to-do${open.length === 1 ? '' : 's'}`;
   $('#ov-needs-n').textContent = needs.length || '';
   $('#ov-progress-n').textContent = progress.length || '';
   $('#ov-todos-n').textContent = open.length || '';
@@ -1063,7 +1078,7 @@ document.addEventListener('contextmenu', e => {
   const dot = kind === 'session' ? sessionDot(item) : runDot(item);
   const items = [];
   if (dot === 'idle' || dot === 'waiting') items.push([`${ICON.read}Mark as read`, () => api.invoke(`${kind}:markRead`, id, true)]);
-  else if (dot === 'none' && (kind === 'session' ? item.live : item.status !== 'running')) items.push([`${ICON.unread}Mark as unread`, () => api.invoke(`${kind}:markRead`, id, false)]);
+  else if ((dot === 'none' || dot === 'bg') && (kind === 'session' ? item.live : item.status !== 'running')) items.push([`${ICON.unread}Mark as unread`, () => api.invoke(`${kind}:markRead`, id, false)]);
   if (kind === 'session') items.push([item.muted ? `${ICON.bell}Unmute notifications` : `${ICON.mute}Mute notifications`, () => api.invoke('session:mute', id, !item.muted)]);
   items.push([`${ICON.list}Save as workflow`, async () => {
     const w = await api.invoke(kind === 'session' ? 'workflow:fromSession' : 'workflow:fromRun', id);

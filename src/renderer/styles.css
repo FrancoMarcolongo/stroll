@@ -19,6 +19,8 @@
   --amber-soft: rgba(227, 160, 8, 0.15);
   --blue: #58a6ff;
   --blue-soft: rgba(88, 166, 255, 0.14);
+  --violet: #a371f7;
+  --violet-soft: rgba(163, 113, 247, 0.16);
   --red: #f85149;
   --red-soft: rgba(248, 81, 73, 0.14);
   --radius: 8px;
@@ -111,6 +113,7 @@ details[open] > summary::before { transform: rotate(90deg); }
 .dot.working { background: var(--green); box-shadow: 0 0 0 3px var(--green-soft); animation: pulse 1.6s ease-in-out infinite; }
 .dot.waiting { background: var(--amber); box-shadow: 0 0 0 3px var(--amber-soft); }
 .dot.idle { background: var(--blue); box-shadow: 0 0 0 3px var(--blue-soft); }
+.dot.bg { background: var(--violet); box-shadow: 0 0 0 3px var(--violet-soft); }
 .dot.none { visibility: hidden; }
 @keyframes pulse { 50% { box-shadow: 0 0 0 5px rgba(63, 185, 80, 0.04); opacity: 0.7; } }
 
@@ -119,6 +122,7 @@ details[open] > summary::before { transform: rotate(90deg); }
 .pill.working { background: var(--green-soft); color: #6fdd7f; border-color: transparent; }
 .pill.waiting { background: var(--amber-soft); color: #f2bf4a; border-color: transparent; }
 .pill.idle { background: var(--blue-soft); color: #8cc2ff; border-color: transparent; }
+.pill.bg { background: var(--violet-soft); color: #c6a8ff; border-color: transparent; }
 .pill.failed { background: var(--red-soft); color: #ff8a83; border-color: transparent; }
 .pill.neutral i { background: var(--text-3); }
 .pill.active { background: var(--accent-soft); color: var(--accent-2); border-color: transparent; }
@@ -257,6 +261,8 @@ details[open] > summary::before { transform: rotate(90deg); }
 .link-btn:hover { color: var(--accent); }
 .muted-icon { color: var(--text-3); display: grid; flex: none; }
 .muted-icon svg { width: 12px; height: 12px; }
+.bg-badge { display: inline-flex; align-items: center; gap: 2px; flex: none; align-self: center; color: var(--violet); font-size: 10.5px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.bg-badge svg { width: 11px; height: 11px; }
 
 #banner { border-bottom: 1px solid var(--line-soft); }
 .banner { display: flex; align-items: center; gap: 10px; padding: 8px 18px; background: var(--blue-soft); color: #cfe3ff; font-size: 12.5px; }

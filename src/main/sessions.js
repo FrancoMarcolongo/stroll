@@ -7,6 +7,7 @@ const { EventEmitter } = require('events');
 const { childEnv } = require('./config');
 const { summarizeInput } = require('./runs');
 const { transcriptFor } = require('./recent');
+const { BackgroundTracker, endedIds } = require('./background');
 
 const BUFFER_LIMIT = 2 * 1024 * 1024; // chars of scrollback kept for replay when a view (re)attaches
 const TRANSCRIPT_TAIL = 512 * 1024;
@@ -150,7 +151,7 @@ class Sessions extends EventEmitter {
       throw new Error(`Couldn't start Claude Code: ${e.message}`);
     }
     const now = Date.now();
-    const entry = { proc, chunks: [], size: 0, seq: 0, modes: new Map(), startedAt: now, lastDataAt: now, lastHookAt: 0, gotHook: false };
+    const entry = { proc, chunks: [], size: 0, seq: 0, modes: new Map(), startedAt: now, lastDataAt: now, lastHookAt: 0, gotHook: false, bg: new BackgroundTracker() };
     // Claude Code never remembers trust for the home folder ("home trust is session-only"), so
     // every session there, resumed ones too, opens on its "Accessing workspace" prompt. Answer
     // it: in HOME, the folder's project settings are the user's own settings.
@@ -165,6 +166,7 @@ class Sessions extends EventEmitter {
       live: true,
       status: 'starting',
       statusDetail: null,
+      background: [],
       unseen: false,
       restorable: false,
       lastActivityAt: new Date().toISOString(),
@@ -197,7 +199,7 @@ class Sessions extends EventEmitter {
       } else if (exitCode) {
         detail = `exited with code ${exitCode}`;
       }
-      this.store.patchSession(id, { live: false, status: 'closed', statusDetail: detail });
+      this.store.patchSession(id, { live: false, status: 'closed', statusDetail: detail, background: [] });
       this.emit('exit', id, exitCode);
     });
     return id;
@@ -223,8 +225,18 @@ class Sessions extends EventEmitter {
 
   stop() { clearInterval(this.watchdog); }
 
+  // Working, or running something in the background: quitting would stop it.
   busyCount() {
-    return [...this.live.keys()].filter(id => this.store.session(id)?.status === 'working').length;
+    return [...this.live.keys()].filter(id => {
+      const s = this.store.session(id);
+      return s?.status === 'working' || s?.background?.length;
+    }).length;
+  }
+
+  // Re-reads the transcript's new lines for background work started or finished.
+  syncBackground(id) {
+    const e = this.live.get(id);
+    if (e && e.bg.scan()) this.store.patchSession(id, { background: e.bg.list() });
   }
 
   // Claude Code sends no hook when a turn is interrupted (Esc), so the user pressing Esc is a
@@ -242,11 +254,13 @@ class Sessions extends EventEmitter {
     }, INTERRUPT_SETTLE_MS);
   }
 
-  // Safety net for interrupts the hint misses: "working" with no output and no hooks for a
-  // while means the turn is over.
+  // Runs every few seconds: picks up background work that started or ended (no hook says so),
+  // and is the safety net for interrupts the hint misses: "working" with no output and no hooks
+  // for a while means the turn is over.
   settleSilentSessions() {
     const t = Date.now();
     for (const [id, e] of this.live) {
+      this.syncBackground(id);
       if (this.store.session(id)?.status !== 'working') continue;
       if (t - e.lastDataAt > SILENT_WORKING_MS && t - e.lastHookAt > SILENT_WORKING_MS) {
         this.store.patchSession(id, { status: 'idle', unseen: false });
@@ -267,6 +281,7 @@ class Sessions extends EventEmitter {
         const transcriptPath = payload.transcript_path || s.transcriptPath;
         const patch = { transcriptPath, lastActivityAt: at };
         if (payload.session_id) patch.claudeSessionId = payload.session_id;
+        if (e && e.bg.follow(transcriptPath)) patch.background = [];
         // A compaction happens mid-turn: Claude is still working.
         if (payload.source !== 'compact') patch.status = 'idle';
         if (payload.source === 'resume') patch.preview = previewFromText(lastAssistantText(transcriptPath)) || s.preview || null;
@@ -275,7 +290,17 @@ class Sessions extends EventEmitter {
         break;
       }
       case 'UserPromptSubmit': {
-        const prompt = oneLine(payload.prompt);
+        // A background task that ended (or a monitor event) starts a turn as a "prompt" too.
+        const raw = String(payload.prompt || '');
+        if (raw.trimStart().startsWith('<task-notification>')) {
+          // The hook can run before the transcript has the notification: end it from here too.
+          if (e) { for (const t of endedIds(raw)) e.bg.end(t); this.store.patchSession(id, { background: e.bg.list() }); }
+          this.syncBackground(id);
+          const summary = oneLine(raw.match(/<summary>([\s\S]*?)<\/summary>/)?.[1]).replace(/&quot;/g, '"').replace(/&gt;/g, '>').replace(/&lt;/g, '<').replace(/&amp;/g, '&');
+          this.store.patchSession(id, { status: 'working', unseen: false, lastActivityAt: at, preview: `↻ ${summary || 'Background task finished'}` });
+          break;
+        }
+        const prompt = oneLine(raw);
         const patch = { status: 'working', unseen: false, lastActivityAt: at, preview: prompt ? `› ${prompt}` : s.preview };
         if (!s.title && prompt) patch.title = prompt.slice(0, 80);
         this.store.patchSession(id, patch);
@@ -305,6 +330,7 @@ class Sessions extends EventEmitter {
         break;
       }
       case 'Stop': {
+        this.syncBackground(id);
         const text = payload.last_assistant_message || lastAssistantText(payload.transcript_path || s.transcriptPath);
         const preview = previewFromText(text);
         this.store.patchSession(id, { status: 'idle', unseen: true, preview: preview || s.preview, lastActivityAt: at });
