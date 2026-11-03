@@ -199,7 +199,7 @@ function renderSidebar() {
     : '';
   patchList($('#session-list'), restoreBar
     + (live.length ? live.map(sessionRow).join('') : '<li class="empty">No live sessions.</li>')
-    + (closed.length ? `<li class="divider">Closed<button class="link-btn" data-act="clear-closed">Clear</button></li>${closed.map(sessionRow).join('')}` : ''));
+    + (closed.length ? closedRows(closed, d.sessions.filter(s => !s.live).length) : ''));
 
   const runs = d.runs.slice().sort((a, b) => (b.startedAt || '').localeCompare(a.startedAt || ''));
   const activeRuns = runs.filter(r => r.status !== 'reviewed');
@@ -220,6 +220,14 @@ function renderSidebar() {
 
   $('#multi-bar').hidden = S.selected.size === 0;
   $('#multi-count').textContent = `${S.selected.size} to-do${S.selected.size === 1 ? '' : 's'} selected`;
+}
+
+// Closed sessions fold under their own title (remembered with the sidebar sections).
+function closedRows(closed, total) {
+  const open = !sidebarPrefs().collapsed.has('closed');
+  return `<li class="divider sub-toggle ${open ? 'open' : ''}" data-sub-toggle="closed" title="Click to ${open ? 'collapse' : 'expand'}">`
+    + `<span class="sub-title">Closed <span class="count">${total}</span></span><button class="link-btn" data-act="clear-closed">Clear</button></li>`
+    + (open ? closed.map(sessionRow).join('') : '');
 }
 
 // Where an open to-do stands: a live linked session makes it "In progress" (tinted by that
@@ -1135,6 +1143,15 @@ function saveSidebar(patch) {
 
 const sidebarBox = $('#sidebar-scroll');
 sidebarBox.addEventListener('click', e => {
+  const sub = e.target.closest('[data-sub-toggle]');
+  if (sub && !e.target.closest('button')) {
+    const { collapsed } = sidebarPrefs();
+    const key = sub.dataset.subToggle;
+    if (collapsed.has(key)) collapsed.delete(key); else collapsed.add(key);
+    saveSidebar({ collapsed: [...collapsed] });
+    renderSidebar();
+    return;
+  }
   const header = e.target.closest('section[data-section] > header');
   if (!header || e.target.closest('button:not([data-sec-toggle])')) return;
   const key = header.parentElement.dataset.section;

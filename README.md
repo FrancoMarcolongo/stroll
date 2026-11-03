@@ -58,7 +58,7 @@ On Linux, plain Ctrl keys (Ctrl+K, Ctrl+J, Ctrl+R, Ctrl+V…) go to Claude Code,
 - **To-dos:** **Start** opens a session for the to-do. **Hand off** sends it to a background run. While one is going, **Go to** opens it instead of starting another. ⌘-click several to start or hand off them together. Reminders fire as notifications. Marking a to-do done while it has open sessions asks whether to end them.
 - **Inside a session started from Stroll,** Claude can manage your list: "add a to-do to …", "hand this off", "what's on my list?". That's the `stroll` MCP server.
 - **Sessions in your home folder** answer Claude Code's "trust this folder" prompt for you. Claude Code never remembers trust for the home folder, so it would ask every time, resumes included. Other folders ask once, as usual.
-- **Sidebar sections** collapse when you click their title and move when you drag it. Both are remembered. A collapsed section shows a yellow dot when something inside needs you.
+- **Sidebar sections** collapse when you click their title and move when you drag it, and closed sessions fold under their own **Closed** title. All of it is remembered. A collapsed section shows a yellow dot when something inside needs you.
 - **Right-click a session** to mark it read or unread, or to mute its notifications.
 - **Drag files or screenshots** onto a session to paste their paths, as in iTerm. Claude Code picks up image paths.
 - **Links Claude prints are clickable.** Web links open in the browser. File links open in Zed at the right line when `zed` is on your PATH. Otherwise macOS opens the file in your text editor, and folders (and anything on Linux) are shown in Finder or the file manager. A file is never run.
