@@ -23,7 +23,7 @@ async function api(method, path, body) {
 const text = obj => ({ content: [{ type: 'text', text: typeof obj === 'string' ? obj : JSON.stringify(obj, null, 2) }] });
 const fail = err => ({ isError: true, content: [{ type: 'text', text: `Stroll is not reachable or refused the call: ${err.message}` }] });
 
-const server = new McpServer({ name: 'stroll', version: '0.3.0' });
+const server = new McpServer({ name: 'stroll', version: '0.8.0' });
 
 function registerSessionTools() {
   server.registerTool('todo_list', {
@@ -34,34 +34,39 @@ function registerSessionTools() {
   });
 
   server.registerTool('todo_add', {
-    description: "Add a to-do to the user's list in Stroll. Only add what the user asked for. It is linked to the current session. remind_at is an ISO 8601 date-time.",
+    description: "Add a to-do to the user's list in Stroll. Only add what the user asked for. It is linked to the current session, and lands in the session's trail unless trail_id says otherwise (null for none). remind_at is an ISO 8601 date-time.",
     inputSchema: {
       title: z.string().min(1),
       notes: z.string().optional(),
       remind_at: z.string().optional(),
       cwd: z.string().optional().describe('Working directory for sessions started from this to-do'),
+      trail_id: z.string().nullable().optional().describe("Trail to put it in; defaults to this session's trail"),
     },
-  }, async ({ title, notes, remind_at, cwd }) => {
+  }, async ({ title, notes, remind_at, cwd, trail_id }) => {
     try {
-      return text(await api('POST', '/api/todos', { title, notes: notes || '', remindAt: remind_at || null, cwd: cwd || null, sessionId: SESSION }));
+      const body = { title, notes: notes || '', remindAt: remind_at || null, cwd: cwd || null, sessionId: SESSION };
+      if (trail_id !== undefined) body.trailId = trail_id;
+      return text(await api('POST', '/api/todos', body));
     } catch (e) { return fail(e); }
   });
 
   server.registerTool('todo_update', {
-    description: 'Update a to-do (title, notes, reminder, working directory). Use todo_complete to mark it done.',
+    description: 'Update a to-do (title, notes, reminder, working directory, trail). Use todo_complete to mark it done.',
     inputSchema: {
       id: z.string(),
       title: z.string().optional(),
       notes: z.string().optional(),
       remind_at: z.string().nullable().optional(),
       cwd: z.string().nullable().optional(),
+      trail_id: z.string().nullable().optional().describe('Move it to this trail (null: no trail)'),
     },
-  }, async ({ id, title, notes, remind_at, cwd }) => {
+  }, async ({ id, title, notes, remind_at, cwd, trail_id }) => {
     const patch = {};
     if (title !== undefined) patch.title = title;
     if (notes !== undefined) patch.notes = notes;
     if (remind_at !== undefined) patch.remindAt = remind_at;
     if (cwd !== undefined) patch.cwd = cwd;
+    if (trail_id !== undefined) patch.trailId = trail_id;
     try { return text(await api('PATCH', `/api/todos/${id}`, patch)); } catch (e) { return fail(e); }
   });
 
@@ -88,6 +93,35 @@ function registerSessionTools() {
     inputSchema: { status: z.string().optional() },
   }, async ({ status }) => {
     try { return text(await api('GET', `/api/runs${status ? `?status=${encodeURIComponent(status)}` : ''}`)); } catch (e) { return fail(e); }
+  });
+
+  server.registerTool('trail_list', {
+    description: "List the user's active trails in Stroll. A trail is a line of sessions about the same piece of work that share the trail's notes.",
+    inputSchema: {},
+  }, async () => {
+    try { return text(await api('GET', '/api/trails')); } catch (e) { return fail(e); }
+  });
+
+  server.registerTool('trail_get', {
+    description: "Get a trail's current notes and its to-dos, sessions and background runs (with their results). Defaults to this session's trail.",
+    inputSchema: { trail_id: z.string().optional() },
+  }, async ({ trail_id }) => {
+    const path = trail_id ? `/api/trails/${encodeURIComponent(trail_id)}` : `/api/trails/current?session=${encodeURIComponent(SESSION || '')}`;
+    try { return text(await api('GET', path)); } catch (e) { return fail(e); }
+  });
+
+  server.registerTool('trail_suggest', {
+    description: "Suggest an addition to the trail's notes, the context every future session on the trail starts with. For durable facts a later session would otherwise rediscover: a decision and why, where something lives, a gotcha, who owns what. One or two lines; not progress updates. It waits for the user to accept, edit or dismiss it in Stroll. Defaults to this session's trail.",
+    inputSchema: { text: z.string().min(1), trail_id: z.string().optional() },
+  }, async ({ text: note, trail_id }) => {
+    try { return text(await api('POST', '/api/trails/suggest', { text: note, trailId: trail_id || null, sessionId: SESSION })); } catch (e) { return fail(e); }
+  });
+
+  server.registerTool('trail_note_add', {
+    description: "Add a line to the trail's notes right away. Only when the user explicitly asked to add something to the trail's notes; otherwise use trail_suggest. Defaults to this session's trail.",
+    inputSchema: { text: z.string().min(1), trail_id: z.string().optional() },
+  }, async ({ text: note, trail_id }) => {
+    try { return text(await api('POST', '/api/trails/note', { text: note, trailId: trail_id || null, sessionId: SESSION })); } catch (e) { return fail(e); }
   });
 
   server.registerTool('sessions_list', {

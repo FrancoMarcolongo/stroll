@@ -4,6 +4,7 @@ A desktop session manager for [Claude Code](https://claude.com/claude-code). The
 
 - **Sessions you can see at a glance.** Every session keeps running while you look at another. A dot shows which ones need you: green means working, yellow means it needs you (a permission prompt, a question or a plan to approve), blue means it's your turn and you haven't looked yet, violet means it's your turn but something it started is still running in the background (a shell, an agent, a monitor). A small counter next to the title shows how many background tasks a session has; hover it to see them. Each row shows a one-line preview.
 - **A to-do list you can act on.** Start a session from a to-do (Claude gets it as context), or **hand it off** to a background run. A to-do with a live session shows **In progress**.
+- **Trails for work that spans many sessions.** A trail keeps shared notes, and every session on it starts with them. Sessions suggest what the next one should know; you accept or dismiss the suggestions.
 - **Workflows for recurring work.** Save a session you run every week (a release, a ticket sync) with the blanks it needs; start it in one click, or schedule it.
 - **Background runs.** Hand off research or prep work. A run investigates and drafts, asks you before doing anything outside its read-only list, and pings you when it's ready. You can continue it as a normal session.
 
@@ -36,6 +37,8 @@ Stroll checks for new versions on its own and shows **Update available**; one cl
 
 Restarting ends open sessions. When Stroll comes back, **Resume all** brings them back with their conversations.
 
+After an update, Stroll shows what changed, once. **Settings › Updates › What's new** shows it again; it's [CHANGELOG.md](CHANGELOG.md).
+
 ## Using it
 
 ![A live Claude Code session, with to-dos, sessions and background runs in the sidebar](docs/screenshots/session.png)
@@ -57,6 +60,9 @@ On Linux, plain Ctrl keys (Ctrl+K, Ctrl+J, Ctrl+R, Ctrl+V…) go to Claude Code,
 
 - **To-dos:** **Start** opens a session for the to-do. **Hand off** sends it to a background run. While one is going, **Go to** opens it instead of starting another. ⌘-click several to start or hand off them together. Reminders fire as notifications. Marking a to-do done while it has open sessions asks whether to end them.
 - **Inside a session started from Stroll,** Claude can manage your list: "add a to-do to …", "hand this off", "what's on my list?". That's the `stroll` MCP server.
+- **Trails:** **+** in the Trails section starts one; write what every session on it should know in its notes (the goal, the repos, the ticket, decisions, gotchas). **New session** on the trail starts Claude with those notes; a resumed session gets them as they are now. Put an existing session on a trail with **Add to trail** in its header or by right-clicking it, and a to-do with its **Trail** field: sessions and hand-offs started from that to-do get the trail's notes too.
+  - **The notes grow as you work.** When Claude learns something the next session would otherwise rediscover, it suggests a line for the notes. Suggestions wait on the trail (a badge in the sidebar counts them): **Add to notes**, edit first, or **Dismiss**. Say "add this to the trail" and Claude writes it right away.
+  - A trail can **Hand off** a background run, which gets the notes too. **Archive** it when the work is done; archived trails fold under **Archived**.
 - **Sessions in your home folder** answer Claude Code's "trust this folder" prompt for you. Claude Code never remembers trust for the home folder, so it would ask every time, resumes included. Other folders ask once, as usual.
 - **Sidebar sections** collapse when you click their title and move when you drag it, and closed sessions fold under their own **Closed** title. All of it is remembered. A collapsed section shows a yellow dot when something inside needs you.
 - **Right-click a session** to mark it read or unread, or to mute its notifications.

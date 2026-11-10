@@ -96,7 +96,7 @@ class Runs extends EventEmitter {
     return true;
   }
 
-  start({ prompt: text, cwd, title, todoIds = [], allowAll = false, workflowId = null }) {
+  start({ prompt: text, cwd, title, todoIds = [], allowAll = false, workflowId = null, trailId = null }) {
     if (!this.config.claudePath) throw new Error('Claude Code (`claude`) was not found on your PATH.');
     const id = crypto.randomUUID();
     const bg = this.config.background || {};
@@ -125,6 +125,7 @@ class Runs extends EventEmitter {
       result: null, error: null, costUsd: null, durationMs: null, numTurns: null, lastActivity: 'Starting…',
       allowAll: !!allowAll,
       workflowId,
+      trailId,
     });
     this.store.rememberDir(dir);
     this.cacheEvents(id, []);

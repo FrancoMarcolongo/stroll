@@ -20,6 +20,9 @@ const { Approvals } = require('./approvals');
 const { Server, writeHookSettings, writeMcpConfig } = require('./server');
 const { recentSessions, firstPrompt } = require('./recent');
 const { parseFields, renderTemplate, dueSlot, nextSlot, validSchedule } = require('./workflows');
+const { parseChangelog, cmpVersion, unseenSections } = require('./changelog');
+
+const CHANGELOG_PATH = path.join(__dirname, '..', '..', 'CHANGELOG.md');
 
 app.setName('Stroll');
 // A separate data folder (tests, experiments) gets its own Electron profile, so it can run
@@ -36,10 +39,12 @@ const shownNotifications = new Set(); // macOS drops click events of notificatio
 const lastNotified = new Map();
 
 
-const handoffPrompt = (todos, instructions, cwd) => [
-  todos.length === 1 ? `Work on this to-do from the user's list: ${todos[0].title}` : "Work on these to-dos from the user's list:",
-  ...(todos.length === 1 ? [] : todos.map(t => `- ${t.title}`)),
+const handoffPrompt = (todos, instructions, cwd, trail = null) => [
+  todos.length === 1 ? `Work on this to-do from the user's list: ${todos[0].title}`
+    : todos.length ? "Work on these to-dos from the user's list:" : `Work on this, for the user's trail "${trail?.title}".`,
+  ...(todos.length > 1 ? todos.map(t => `- ${t.title}`) : []),
   ...todos.filter(t => t.notes).map(t => `Notes on "${t.title}": ${t.notes}`),
+  trail ? `\nThis is part of the trail "${trail.title}". Its notes, the context the user keeps for this work:\n${trail.notes.trim() || '(empty)'}` : '',
   instructions ? `\nInstructions: ${instructions}` : '',
   `\nWorking folder: ${cwd}`,
   '\nInvestigate, gather the context needed and prepare drafts so the user can finish this quickly.',
@@ -90,17 +95,41 @@ function updateBadge() {
 
 // `allowAll` comes only from the hand-off dialog: a hand-off asked for from inside a Claude
 // session (the MCP tool) can't turn off the run's permission prompts.
-function startHandoff(todoIds, { instructions = '', prompt = null, cwd = null, title = null, allowAll = false } = {}) {
+// A hand-off from a trail (no to-do) takes its task from the instructions; one from a to-do on
+// a trail gets the trail's notes too.
+function startHandoff(todoIds, { instructions = '', prompt = null, cwd = null, title = null, allowAll = false, trailId } = {}) {
   const todos = todoIds.map(id => store.todo(id)).filter(Boolean);
-  const dir = cwd || todos.find(t => t.cwd)?.cwd || store.state.recentDirs[0] || config.defaultCwd;
+  const trail = store.trail(trailId !== undefined ? trailId : todos.map(t => t.trailId).find(Boolean)) || null;
+  if (!todos.length && !prompt && !String(instructions).trim()) throw new Error('Say what the background run should do.');
+  const dir = cwd || todos.find(t => t.cwd)?.cwd || trail?.cwd || store.state.recentDirs[0] || config.defaultCwd;
+  const firstLine = String(instructions).trim().split('\n')[0].slice(0, 60);
   return runs.start({
-    prompt: prompt || handoffPrompt(todos, instructions, dir),
+    prompt: prompt || handoffPrompt(todos, instructions, dir, trail),
     cwd: dir,
-    title: title || (todos.length === 1 ? todos[0].title : todos.length ? `${todos.length} to-dos` : null),
+    title: title || (todos.length === 1 ? todos[0].title : todos.length ? `${todos.length} to-dos` : trail ? `${trail.title} · ${firstLine}` : null),
     todoIds,
     allowAll,
+    trailId: trail?.id || null,
   });
 }
+
+// What a session sees of its trail through the MCP tools: the notes now, and the trail's work.
+function trailForApi(trailId, sessionId) {
+  const t = store.trail(trailId || store.session(sessionId)?.trailId);
+  if (!t) return null;
+  const clip = (s, n) => (s && s.length > n ? `${s.slice(0, n)}…` : s);
+  return {
+    id: t.id, title: t.title, notes: t.notes, cwd: t.cwd, status: t.status,
+    pendingSuggestions: t.suggestions.map(x => x.text),
+    todos: store.state.todos.filter(x => x.trailId === t.id).map(x => ({ id: x.id, title: x.title, status: x.status, notes: x.notes || undefined })),
+    sessions: store.state.sessions.filter(x => x.trailId === t.id)
+      .map(x => ({ id: x.id, title: x.title, live: x.live, status: x.status, preview: x.preview, lastActivityAt: x.lastActivityAt, current: x.id === sessionId || undefined })),
+    runs: store.state.runs.filter(x => x.trailId === t.id)
+      .map(x => ({ id: x.id, title: x.title, status: x.status, finishedAt: x.finishedAt, result: clip(x.result, 4000) })),
+  };
+}
+
+const NO_TRAIL = "This session isn't on a trail. Ask the user which trail they mean (trail_list shows them) and pass its id.";
 
 // ---------- workflows ----------
 const WORKFLOW_GRACE_MS = 15 * 60 * 1000; // a scheduled time missed by more than this was missed
@@ -222,6 +251,20 @@ function publicConfig() {
     version: app.getVersion(),
     appDir: paths.appDir,
   };
+}
+
+// "What's new": the changelog sections this user hasn't seen (all of them for Settings).
+// Showing them counts as seen, so they appear once.
+function whatsNew(all = false) {
+  let sections;
+  try { sections = parseChangelog(fs.readFileSync(CHANGELOG_PATH, 'utf8')); } catch (_) { return null; }
+  const current = app.getVersion();
+  const list = all ? sections.filter(s => cmpVersion(s.version, current) <= 0) : unseenSections(sections, store.state.lastSeenVersion, current);
+  if (!all && store.state.lastSeenVersion !== current) {
+    store.state.lastSeenVersion = current;
+    store.changed();
+  }
+  return list.length ? { version: current, sections: list.slice(0, 10) } : null;
 }
 
 // ---------- updates (installs are git checkouts) ----------
@@ -398,6 +441,25 @@ function registerIpc() {
   handle('todo:delete', id => store.deleteTodo(id));
   handle('todo:handoff', (todoIds, opts) => startHandoff(todoIds, opts));
 
+  // A trail made from a session or a to-do takes it in.
+  handle('trail:add', ({ title, notes, cwd, sessionId, todoId } = {}) => {
+    const t = store.addTrail({ title, notes, cwd });
+    if (sessionId) store.setSessionTrail(sessionId, t.id);
+    if (todoId) store.updateTodo(todoId, { trailId: t.id });
+    return t;
+  });
+  handle('trail:update', (id, patch = {}) => {
+    const clean = {};
+    if (typeof patch.title === 'string' && patch.title.trim()) clean.title = patch.title.trim();
+    if (typeof patch.notes === 'string') clean.notes = patch.notes;
+    if ('cwd' in patch) clean.cwd = (typeof patch.cwd === 'string' && patch.cwd.trim()) || null;
+    if (patch.status === 'active' || patch.status === 'archived') clean.status = patch.status;
+    return store.updateTrail(id, clean);
+  });
+  handle('trail:delete', id => store.deleteTrail(id));
+  handle('trail:suggestion', (trailId, suggestionId, accept, text) => store.resolveSuggestion(trailId, suggestionId, Boolean(accept), typeof text === 'string' && text.trim() ? text : null));
+  handle('session:setTrail', (id, trailId) => store.setSessionTrail(id, trailId || null));
+
   handle('session:create', opts => sessions.create(opts));
   handle('session:buffer', id => sessions.buffer(id));
   handle('session:kill', id => sessions.kill(id));
@@ -477,6 +539,7 @@ function registerIpc() {
     return publicConfig();
   });
   handle('app:checkUpdates', async () => { await checkUpdates(); return updateInfo; });
+  handle('app:whatsNew', all => whatsNew(Boolean(all)));
   handle('app:applyUpdate', () => applyUpdate());
 
   handle('dialog:pickDir', async start => {
@@ -517,6 +580,8 @@ async function boot() {
   app.dock?.setIcon(nativeImage.createFromPath(ICON_PATH));
   config = loadConfig();
   store = new Store(paths.state);
+  // A new install starts with nothing to catch up on.
+  if (store.fresh) store.state.lastSeenVersion = app.getVersion();
   server = new Server();
   sessions = new Sessions({ store, config, paths, server });
   runs = new Runs({ store, config, paths });
@@ -542,7 +607,21 @@ async function boot() {
       .map(({ prompt, ...r }) => r),
     requestApproval: body => approvals.request(body),
     getApproval: id => approvals.get(id),
-    listSessions: () => store.state.sessions.map(s => ({ id: s.id, title: s.title, cwd: s.cwd, live: s.live, status: s.status, preview: s.preview, todoIds: s.todoIds, lastActivityAt: s.lastActivityAt })),
+    listSessions: () => store.state.sessions.map(s => ({ id: s.id, title: s.title, cwd: s.cwd, live: s.live, status: s.status, preview: s.preview, todoIds: s.todoIds, trailId: s.trailId || null, lastActivityAt: s.lastActivityAt })),
+    listTrails: () => store.state.trails.filter(t => t.status === 'active')
+      .map(t => ({ id: t.id, title: t.title, cwd: t.cwd, liveSessions: store.state.sessions.filter(x => x.trailId === t.id && x.live).length, openTodos: store.state.todos.filter(x => x.trailId === t.id && x.status === 'open').length })),
+    getTrail: (trailId, sessionId) => trailForApi(trailId, sessionId) || { error: trailId ? 'no such trail' : NO_TRAIL },
+    suggestTrailNote: ({ trailId, sessionId, text }) => {
+      const t = store.trail(trailId || store.session(sessionId)?.trailId);
+      if (!t) return { error: trailId ? 'no such trail' : NO_TRAIL };
+      const sug = store.suggestTrailNote(t.id, text, sessionId);
+      return sug ? { ok: true, trail: t.title, message: 'Suggested. The user accepts or dismisses it in Stroll.' } : { error: 'text is required' };
+    },
+    addTrailNote: ({ trailId, sessionId, text }) => {
+      const t = store.trail(trailId || store.session(sessionId)?.trailId);
+      if (!t) return { error: trailId ? 'no such trail' : NO_TRAIL };
+      return store.appendTrailNote(t.id, text) ? { ok: true, trail: t.title, notes: store.trail(t.id).notes } : { error: 'text is required' };
+    },
   });
   writeHookSettings(paths.hookSettings);
   writeMcpConfig(paths.mcpConfig, { serverScript: paths.mcpServer, port: server.port, token: server.token });

@@ -45,7 +45,7 @@ const DEFAULT_CONFIG = {
   },
   updates: { check: true },
   // Sidebar sections, top to bottom, and which ones are collapsed.
-  sidebar: { order: ['todos', 'sessions', 'runs', 'workflows', 'recent'], collapsed: ['recent'] },
+  sidebar: { order: ['todos', 'trails', 'sessions', 'runs', 'workflows', 'recent'], collapsed: ['recent'], expanded: [] },
 };
 
 // Background runs are unattended. They load no settings at all (`--setting-sources ""`), so

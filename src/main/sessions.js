@@ -78,14 +78,45 @@ function lastAssistantText(file) {
   return null;
 }
 
+const words = s => (String(s || '').match(/\S+/g) || []).length;
+const THIN_NOTES_WORDS = 15;
+
+// What a session on a trail is told: the trail's notes, and how to keep them useful for the
+// next session (suggest, the user accepts; write directly only when the user asks).
+function trailContext(trail) {
+  const notes = String(trail.notes || '').trim();
+  const lines = [
+    `This session is on the trail "${trail.title}": a line of sessions about the same piece of work that share the trail's notes. The notes as of when this session started (\`trail_get\` returns the latest, plus the trail's to-dos, sessions and background runs):`,
+    notes ? notes.split('\n').map(l => `  ${l}`).join('\n') : '  (empty)',
+  ];
+  if (words(notes) < THIN_NOTES_WORDS) {
+    lines.push('The notes are still thin. Early on, ask the user for what a future session would need to know (the goal, the repos and folders involved, the ticket or epic, constraints) and suggest it with `trail_suggest`.');
+  }
+  lines.push(
+    'Keep the notes useful for the next session: when you learn something it would otherwise have to rediscover (a decision and why, where something lives, a gotcha, who owns what), suggest it with `trail_suggest`, one or two lines each, a few per session at most, usually when a piece of work is done. Say in one line what you suggested; the user accepts or dismisses it in Stroll. No progress updates, and nothing the code, git history or tickets already say. Facts about this trail go in the trail rather than in your own memory files.',
+    'When the user explicitly asks you to add something to the trail\'s notes, use `trail_note_add`, which writes it right away.',
+  );
+  return lines.join('\n');
+}
+
 function todoContext(todos) {
-  if (!todos.length) return null;
   const lines = todos.map(t => `- ${t.title}${t.notes ? `\n  Notes: ${t.notes.replace(/\n/g, '\n  ')}` : ''}`);
   return [
-    "This session was started from Stroll, the user's session manager, for these to-dos from their list:",
+    "It was started for these to-dos from the user's list:",
     ...lines,
     "The `stroll` MCP tools read and update the user's to-do list. When the work is finished, ask the user whether to mark the to-do done; do not mark it done on your own.",
   ].join('\n');
+}
+
+// Appended to the system prompt when the session starts (and again on every resume, so a
+// resumed session gets the notes as they are now).
+function sessionContext(trail, todos) {
+  if (!trail && !todos.length) return null;
+  return [
+    "This session was started from Stroll, the user's session manager.",
+    trail ? trailContext(trail) : null,
+    todos.length ? todoContext(todos) : null,
+  ].filter(Boolean).join('\n\n');
 }
 
 // Private terminal modes (bracketed paste, focus reporting, cursor…) set by the TUI. The
@@ -108,16 +139,25 @@ class Sessions extends EventEmitter {
 
   isLive(id) { return this.live.has(id); }
 
-  create({ cwd, title, todoIds = [], resumeId = null, firstMessage = null, workflowId = null, cols = 120, rows = 34 }) {
+  // trailId: undefined keeps the session's trail (or takes its to-dos'); null means none.
+  create({ cwd, title, todoIds = [], trailId, resumeId = null, firstMessage = null, workflowId = null, cols = 120, rows = 34 }) {
     if (!this.config.claudePath) {
       throw new Error('Claude Code (`claude`) was not found on your PATH. Install it from https://claude.com/claude-code, then restart Stroll.');
     }
     const id = resumeId || crypto.randomUUID();
     if (this.live.has(id)) return id;
     const existing = this.store.session(id);
-    const dir = cwd && fs.existsSync(cwd) ? cwd : (existing?.cwd && fs.existsSync(existing.cwd) ? existing.cwd : this.config.defaultCwd);
     const allTodoIds = Array.from(new Set([...(existing?.todoIds || []), ...todoIds]));
     const todos = allTodoIds.map(t => this.store.todo(t)).filter(Boolean);
+    // A session keeps its trail; a new one (or one from before trails) takes its to-dos' trail,
+    // and a background run continued as a session keeps the run's.
+    const wantedTrail = trailId !== undefined ? trailId
+      : existing && existing.trailId !== undefined ? existing.trailId
+        : (this.store.run(id)?.trailId || todos.map(t => t.trailId).find(Boolean));
+    const trail = this.store.trail(wantedTrail) || null;
+    const dir = cwd && fs.existsSync(cwd) ? cwd
+      : existing?.cwd && fs.existsSync(existing.cwd) ? existing.cwd
+        : trail?.cwd && fs.existsSync(trail.cwd) ? trail.cwd : this.config.defaultCwd;
 
     // After /clear (or /resume inside the TUI) Claude continues under a new session id; resume
     // that one. A session that never got a message has no transcript and starts fresh instead.
@@ -128,7 +168,7 @@ class Sessions extends EventEmitter {
     const args = ['--mcp-config', this.paths.mcpConfig, '--settings', this.paths.hookSettings];
     args.push(...(resumable ? ['--resume', resumable] : ['--session-id', id]));
     if (!resumable && (title || existing?.title)) args.push('--name', title || existing.title);
-    const context = todoContext(todos);
+    const context = sessionContext(trail, todos);
     if (context) args.push('--append-system-prompt', context);
     if (firstMessage && firstMessage.trim()) args.push('--', firstMessage.trim());
 
@@ -171,6 +211,7 @@ class Sessions extends EventEmitter {
       restorable: false,
       lastActivityAt: new Date().toISOString(),
       todoIds: allTodoIds,
+      trailId: trail?.id || null,
       firstMessage: existing?.firstMessage || (firstMessage && firstMessage.trim()) || null,
       workflowId: workflowId || existing?.workflowId || null,
     });
@@ -346,4 +387,4 @@ class Sessions extends EventEmitter {
   }
 }
 
-module.exports = { Sessions, previewFromText };
+module.exports = { Sessions, previewFromText, sessionContext };

@@ -128,6 +128,14 @@ class Server {
         return t ? json(200, t) : json(404, { error: 'no such to-do' });
       }
     }
+    if (parts[1] === 'trails') {
+      const reply = r => (r && r.error ? json(400, r) : json(200, r));
+      if (parts.length === 2 && req.method === 'GET') return json(200, h.listTrails());
+      if (parts[2] === 'suggest' && req.method === 'POST') return reply(h.suggestTrailNote(await body()));
+      if (parts[2] === 'note' && req.method === 'POST') return reply(h.addTrailNote(await body()));
+      // "current": the trail of the session asking (?session=…).
+      if (parts.length === 3 && req.method === 'GET') return reply(h.getTrail(parts[2] === 'current' ? null : parts[2], url.searchParams.get('session')));
+    }
     if (parts[1] === 'approvals' && parts.length === 2 && req.method === 'POST') return json(200, h.requestApproval(await body()));
     if (parts[1] === 'approvals' && parts.length === 3 && req.method === 'GET') {
       const a = h.getApproval(parts[2]);

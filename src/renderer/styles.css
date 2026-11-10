@@ -333,3 +333,41 @@ section.drop-after { box-shadow: inset 0 -2px 0 var(--accent); }
 .sub-title::before { content: ''; width: 0; height: 0; border-left: 4px solid currentColor; border-top: 3.5px solid transparent; border-bottom: 3.5px solid transparent; transition: transform 0.12s; }
 .divider.sub-toggle.open .sub-title::before { transform: rotate(90deg); }
 
+
+/* ---------- trails ---------- */
+.contents { display: contents; }
+.sugg-badge { display: inline-flex; align-items: center; gap: 2px; flex: none; align-self: center; color: var(--accent); font-size: 10.5px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.sugg-badge svg { width: 11px; height: 11px; }
+.chip.trail-chip svg { color: var(--accent); }
+.field label .hint { margin-left: 6px; font-size: 11.5px; }
+.trail-view textarea#trail-notes { min-height: 240px; font-size: 13px; }
+.inline select { flex: 1; }
+/* .help breaks anywhere for long paths; sentences wrap at words. */
+.todo-view .help, .modal .help { word-break: normal; overflow-wrap: anywhere; }
+.suggestions { background: linear-gradient(180deg, #282115, #1c1914); border: 1px solid rgba(217, 162, 107, 0.45); border-radius: 12px; padding: 14px 16px; display: grid; gap: 12px; }
+.suggestions .ap-head svg { color: var(--accent); }
+.sugg { display: grid; gap: 6px; }
+.sugg textarea { width: 100%; background: var(--bg-input); border: 1px solid var(--line); border-radius: var(--radius); padding: 7px 10px; outline: none; resize: vertical; font: inherit; line-height: 1.5; color: var(--text); }
+.sugg textarea:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.sugg-foot { display: flex; align-items: center; gap: 6px; }
+.sugg-foot .h-meta { color: var(--text-3); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.sugg-foot .spacer, .modal footer .spacer { flex: 1; }
+.inline-add { display: flex; align-items: center; gap: 8px; margin-top: 6px; background: transparent; border: 1px dashed var(--line); border-radius: var(--radius); padding: 0 10px; transition: border-color 0.12s; }
+.inline-add:focus-within { border-style: solid; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.inline-add svg { width: 14px; height: 14px; color: var(--text-3); }
+.inline-add input { flex: 1; min-width: 0; background: transparent; border: 0; padding: 7px 0; outline: none; }
+.inline-add input::placeholder { color: var(--text-3); }
+
+/* ---------- what's new ---------- */
+.modal.wide { width: 620px; }
+.modal h2 svg { display: inline-block; vertical-align: -2px; margin-right: 8px; color: var(--accent); }
+.whats-new { max-height: 58vh; overflow-y: auto; display: grid; gap: 16px; padding-right: 4px; }
+.wn-section h3 { margin: 0 0 6px; font-size: 13px; font-weight: 650; display: flex; align-items: baseline; gap: 8px; }
+.wn-section h3 .h-meta { color: var(--text-3); font-size: 12px; font-weight: 400; }
+.wn-body h4 { margin: 12px 0 6px; font-size: 11px; font-weight: 650; color: var(--accent-2); text-transform: uppercase; letter-spacing: 0.7px; }
+.wn-body h4:first-child { margin-top: 0; }
+.wn-body ul { margin: 0; padding-left: 18px; display: grid; gap: 6px; }
+.wn-body li, .wn-body p { color: var(--text-2); line-height: 1.55; }
+.wn-body p { margin: 0 0 6px; }
+.wn-body b { color: var(--text); font-weight: 600; }
+.wn-body code { font-family: var(--mono); font-size: 12px; background: var(--bg-raised); padding: 1px 5px; border-radius: 4px; }

@@ -67,6 +67,9 @@ const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
 const liveSessions = () => S.data.sessions.filter(s => s.live).sort((a, b) => (b.lastActivityAt || '').localeCompare(a.lastActivityAt || ''));
 const run = id => S.data.runs.find(r => r.id === id);
 const workflow = id => (S.data.workflows || []).find(w => w.id === id);
+const trail = id => (id ? (S.data.trails || []).find(t => t.id === id) : undefined);
+const byOrder = (a, b) => (a.order ?? 0) - (b.order ?? 0);
+const activeTrails = () => (S.data.trails || []).filter(t => t.status !== 'archived').sort(byOrder);
 
 // Line icons (24px grid, stroked), inlined so the app needs no icon dependency.
 const svgIcon = body => `<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${body}</svg>`;
@@ -93,6 +96,10 @@ const ICON = {
   mute: svgIcon('<path d="M13.73 21a2 2 0 01-3.46 0"/><path d="M18.63 13A17.9 17.9 0 0118 8"/><path d="M6.26 6.26A5.86 5.86 0 006 8c0 7-3 9-3 9h14"/><path d="M18 8a6 6 0 00-9.33-5"/><path d="M2 2l20 20"/>'),
   download: svgIcon('<path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><path d="M7 10l5 5 5-5"/><path d="M12 15V3"/>'),
   alert: svgIcon('<path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/><path d="M12 9v4M12 17h.01"/>'),
+  trail: svgIcon('<circle cx="6" cy="19.5" r="1.8"/><circle cx="6" cy="4.5" r="1.8"/><path d="M6 17.7c0-4.2 12-3.2 12-5.7S6 10.5 6 6.3"/>'),
+  note: svgIcon('<path d="M4 20h4L19 9l-4-4L4 16z"/><path d="M13.5 6.5l4 4"/>'),
+  archive: svgIcon('<rect x="3" y="4" width="18" height="5" rx="1.5"/><path d="M5 9v9a2 2 0 002 2h10a2 2 0 002-2V9"/><path d="M10 13h4"/>'),
+  sparkle: svgIcon('<path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9z"/><path d="M19 15l.8 2.2L22 18l-2.2.8L19 21l-.8-2.2L16 18l2.2-.8z"/>'),
 };
 document.querySelectorAll('[data-icon]').forEach(el => { el.innerHTML = ICON[el.dataset.icon] || ''; });
 
@@ -226,9 +233,17 @@ function renderSidebar() {
   patchList($('#workflow-list'), (d.workflows || []).map(workflowRow).join('')
     || '<li class="empty">Add one with +, or right-click a session and save it as a workflow.</li>');
 
+  const trails = activeTrails();
+  const archived = (d.trails || []).filter(t => t.status === 'archived').sort(byOrder);
+  patchList($('#trail-list'), (trails.length ? trails.map(trailRow).join('') : '<li class="empty">Add one with + to give related sessions shared notes.</li>')
+    + (archived.length ? archivedTrailRows(archived) : ''));
+
   patchList($('#recent-list'), S.recent.length ? S.recent.map(recentRow).join('') : `<li class="empty">${S.recentLoaded ? 'Nothing recent.' : 'Loading…'}</li>`);
 
-  const attention = { todos: n.reminders.length, sessions: n.waiting.length + n.yourTurn.length, runs: n.runs.length, workflows: n.workflows.length };
+  const attention = {
+    todos: n.reminders.length, sessions: n.waiting.length + n.yourTurn.length, runs: n.runs.length, workflows: n.workflows.length,
+    trails: trails.filter(t => ['waiting', 'idle'].includes(trailDot(t))).length,
+  };
   for (const [key, count] of Object.entries(attention)) document.querySelector(`section[data-section="${key}"]`)?.toggleAttribute('data-alert', count > 0);
 
   $('#multi-bar').hidden = S.selected.size === 0;
@@ -241,6 +256,70 @@ function closedRows(closed, total) {
   return `<li class="divider sub-toggle ${open ? 'open' : ''}" data-sub-toggle="closed" title="Click to ${open ? 'collapse' : 'expand'}">`
     + `<span class="sub-title">Closed <span class="count">${total}</span></span><button class="link-btn" data-act="clear-closed">Clear</button></li>`
     + (open ? closed.map(sessionRow).join('') : '');
+}
+
+// Archived trails fold under their own title, closed until opened (remembered with the sections).
+function archivedTrailRows(archived) {
+  const open = sidebarPrefs().expanded.has('trails-archived');
+  return `<li class="divider sub-toggle ${open ? 'open' : ''}" data-sub-toggle="trails-archived" data-sub-default="closed" title="Click to ${open ? 'collapse' : 'expand'}">`
+    + `<span class="sub-title">Archived <span class="count">${archived.length}</span></span></li>`
+    + (open ? archived.map(trailRow).join('') : '');
+}
+
+// ---------- trails ----------
+// A trail's state comes from its live sessions and its background runs, with the same dots.
+const trailSessions = tr => S.data.sessions.filter(s => s.trailId === tr.id);
+const trailRuns = tr => S.data.runs.filter(r => r.trailId === tr.id);
+const trailTodos = tr => S.data.todos.filter(t => t.trailId === tr.id);
+function trailDot(tr) {
+  const dots = [...trailSessions(tr).filter(s => s.live).map(sessionDot), ...trailRuns(tr).map(runDot)];
+  return ['waiting', 'idle', 'working', 'bg'].find(d => dots.includes(d)) || 'none';
+}
+const lastActivity = list => list.map(x => x.lastActivityAt || x.finishedAt || x.startedAt).filter(Boolean).sort().pop() || null;
+function trailSub(tr) {
+  const live = trailSessions(tr).filter(s => s.live).length;
+  const open = trailTodos(tr).filter(t => t.status === 'open').length;
+  const bits = [live && plural(live, 'live session'), open && plural(open, 'open to-do')].filter(Boolean);
+  if (bits.length) return bits.join(' · ');
+  const last = lastActivity([...trailSessions(tr), ...trailRuns(tr)]);
+  return last ? `Last session ${agoText(last)}` : 'No sessions yet';
+}
+// Where the trail's work is happening now (as for a to-do), for "Go to".
+function trailWork(tr) {
+  const live = trailSessions(tr).filter(s => s.live);
+  if (live.length) {
+    const rank = s => ({ waiting: 0, idle: 1, working: 2, bg: 3 }[sessionDot(s)] ?? 4);
+    live.sort((a, b) => rank(a) - rank(b) || (b.lastActivityAt || '').localeCompare(a.lastActivityAt || ''));
+    return { type: 'session', id: live[0].id };
+  }
+  const runs = trailRuns(tr);
+  const r = runs.find(x => x.pendingApproval) || runs.find(x => x.status === 'running') || runs.find(x => x.unseen && x.status === 'ready');
+  return r ? { type: 'run', id: r.id } : null;
+}
+
+function trailRow(tr) {
+  const isActive = S.view.type === 'trail' && S.view.id === tr.id;
+  const n = tr.suggestions?.length || 0;
+  const badge = n ? `<span class="sugg-badge" title="${plural(n, 'suggestion')} for the notes">${ICON.note}${n}</span>` : '';
+  return `<li class="row ${isActive ? 'active' : ''} ${tr.status === 'archived' ? 'dim' : ''}" data-kind="trail" data-id="${esc(tr.id)}" title="${esc(shortDir(tr.cwd || ''))}">
+    ${dotHtml(trailDot(tr))}
+    <div class="main"><div class="title-line"><span class="title">${esc(tr.title)}</span>${badge}</div>
+    <div class="sub">${esc(trailSub(tr))}</div></div>
+    <span class="row-actions"><button class="icon-btn" data-act="trail-start" title="New session on this trail">${ICON.play}</button></span>
+  </li>`;
+}
+
+const trailChip = id => {
+  const tr = trail(id);
+  return tr ? `<span class="chip trail-chip" data-goto-trail="${esc(tr.id)}" title="Open trail: ${esc(tr.title)}">${ICON.trail}${esc(tr.title.slice(0, 40))}</span>` : '';
+};
+
+// Every trail, plus the selected one if it's archived, for a trail picker.
+function trailOptions(selected) {
+  const list = activeTrails();
+  const cur = trail(selected);
+  if (cur && !list.includes(cur)) list.push(cur);
+  return `<option value="">None</option>${list.map(t => `<option value="${esc(t.id)}" ${t.id === selected ? 'selected' : ''}>${esc(t.title)}${t.status === 'archived' ? ' (archived)' : ''}</option>`).join('')}`;
 }
 
 // Where an open to-do stands: a live linked session makes it "In progress" (tinted by that
@@ -428,7 +507,7 @@ function navigate(view) {
 // A view can be opened for something created a moment ago (a new session, a hand-off) before
 // the state:changed push arrives; fetch fresh state once before giving up on it.
 async function ensureKnown(view) {
-  const find = { session, run, todo, workflow }[view.type];
+  const find = { session, run, todo, workflow, trail }[view.type];
   if (!find || find(view.id)) return true;
   const fresh = await api.invoke('state:get');
   S.data = { ...fresh, config: S.data.config };
@@ -438,7 +517,7 @@ async function ensureKnown(view) {
 
 function renderMain() {
   const v = S.view;
-  const find = { session, run, todo, workflow }[v.type];
+  const find = { session, run, todo, workflow, trail }[v.type];
   if (find && !find(v.id)) {
     ensureKnown(v).then(ok => { if (S.view === v) { if (ok) renderMain(); else navigate({ type: 'home' }); } });
     return;
@@ -457,6 +536,7 @@ function renderMain() {
   if (v.type === 'run') return renderRun(header, panel);
   if (v.type === 'todo') return renderTodo(header, panel);
   if (v.type === 'workflow') return renderWorkflow(header, panel);
+  if (v.type === 'trail') return renderTrail(header, panel);
   if (v.type === 'settings') return renderSettings(header, panel);
   return renderHome(header, panel);
 }
@@ -469,13 +549,16 @@ function headerChips(todoIds) {
 function renderSession(header, termsEl) {
   const s = session(S.view.id);
   if (!s) return navigate({ type: 'home' });
+  header.dataset.trail = sessionHeaderKey(s);
   header.innerHTML = `
     <span class="h-title" id="session-title" contenteditable="true" spellcheck="false" title="Click to rename">${esc(s.title || 'Untitled session')}</span>
     ${sessionPill(s)}
     <span class="h-path" title="${esc(s.cwd || '')}">${ICON.folder}${esc(shortDir(s.cwd))}</span>
+    ${trailChip(s.trailId)}
     ${headerChips(s.todoIds)}
     <span class="spacer"></span>
     ${s.live ? `<button class="btn ghost" data-act="mark-unread" title="Show the blue dot again so you come back to it">${ICON.unread}Mark unread</button>` : ''}
+    <button class="btn ghost" data-act="session-trail" title="${s.trailId ? 'Move it to another trail' : 'Put it on a trail: its sessions share the trail’s notes'}">${ICON.trail}${s.trailId ? 'Trail' : 'Add to trail'}</button>
     <button class="btn ghost" data-act="link-todo">${ICON.link}Link to-do</button>
     ${s.live
     ? `<button class="btn danger" data-act="kill-session">${ICON.stop}End session</button>`
@@ -510,9 +593,12 @@ function sessionPill(s) {
   return `<span class="pill ${dot === 'none' ? 'neutral' : dot}" id="session-pill"${bg ? ` title="${esc(bgDetail(s))}"` : ''}><i></i>${esc(label)}</span>`;
 }
 
+// The header is rebuilt when the session's trail or to-dos change (from a picker or the MCP tools).
+const sessionHeaderKey = s => `${s.trailId || ''}:${trail(s.trailId)?.title || ''}:${(s.todoIds || []).join(',')}`;
 function updateSessionHeader() {
   const s = session(S.view.id);
   if (!s) return;
+  if ($('#view-header').dataset.trail !== sessionHeaderKey(s)) { renderMain(); return; }
   const pill = $('#session-pill');
   const fresh = sessionPill(s);
   if (pill && pill.outerHTML !== fresh) pill.outerHTML = fresh;
@@ -631,6 +717,7 @@ function renderTodo(header, panel) {
     <span class="h-title">${esc(t.title)}</span>
     <span id="todo-pill">${pillHtml(todoState(t))}</span>
     <span class="h-meta">added ${agoText(t.createdAt)}${done ? ` · done ${agoText(t.doneAt)}` : ''}</span>
+    <span id="todo-trail-chip">${trailChip(t.trailId)}</span>
     <span class="spacer"></span>
     ${done ? '' : `<span id="todo-start">${todoStartButtons(t)}</span>`}
     <button class="btn ghost" data-act="toggle-current">${done ? `${ICON.resume}Reopen` : `${ICON.check}Mark done`}</button>
@@ -641,7 +728,9 @@ function renderTodo(header, panel) {
     <div class="field"><label>Notes</label><textarea id="todo-notes" placeholder="Context, links, what done looks like…">${esc(t.notes)}</textarea></div>
     <div class="field"><label>Reminder</label><div class="inline"><input type="datetime-local" id="todo-remind" value="${toLocalInput(t.remindAt)}">
       <button class="btn" data-remind="60">In 1h</button><button class="btn" data-remind="tomorrow">Tomorrow 9:00</button><button class="btn ghost" data-remind="clear">Clear</button></div></div>
-    <div class="field"><label>Working directory</label><div class="inline"><input type="text" id="todo-cwd" value="${esc(t.cwd || '')}" placeholder="${esc(S.data.config.defaultCwd)}"><button class="btn" data-act="pick-todo-cwd">Browse…</button></div></div>
+    <div class="field"><label>Working directory</label><div class="inline"><input type="text" id="todo-cwd" value="${esc(t.cwd || '')}" placeholder="${esc(trail(t.trailId)?.cwd || S.data.config.defaultCwd)}"><button class="btn" data-act="pick-todo-cwd">Browse…</button></div></div>
+    <div class="field"><label>Trail</label><select id="todo-trail"></select>
+      <p class="help">Sessions and hand-offs started from this to-do get the trail’s notes too.</p></div>
     <div class="field links" id="todo-links"></div>
   </div>`;
   renderTodoLinks();
@@ -651,6 +740,14 @@ function renderTodo(header, panel) {
   $('#todo-notes').addEventListener('change', e => save({ notes: e.target.value }));
   $('#todo-cwd').addEventListener('change', e => save({ cwd: e.target.value.trim() || null }));
   $('#todo-remind').addEventListener('change', e => save({ remindAt: e.target.value ? new Date(e.target.value).toISOString() : null }));
+  $('#todo-trail').addEventListener('change', async e => {
+    if (e.target.value !== '__new') return save({ trailId: e.target.value || null });
+    const tr = await api.invoke('trail:add', { title: t.title, cwd: t.cwd, todoId: t.id });
+    e.target.blur();
+    e.target.dataset.markup = '';
+    renderTodoLinks();
+    return flash(`Started the trail “${tr.title}”. Open it to write its notes.`, { type: 'trail', id: tr.id }, { ms: 6000 });
+  });
 }
 
 // With work already going, "Go to" leads and starting another session is the secondary choice.
@@ -671,12 +768,137 @@ function renderTodoLinks() {
   const start = $('#todo-start');
   const startMarkup = start && todoStartButtons(t);
   if (start && start.dataset.markup !== startMarkup) { start.innerHTML = startMarkup; start.dataset.markup = startMarkup; }
+  const chip = $('#todo-trail-chip');
+  const chipMarkup = trailChip(t.trailId);
+  if (chip && chip.innerHTML !== chipMarkup) chip.innerHTML = chipMarkup;
+  const sel = $('#todo-trail');
+  const options = `${trailOptions(t.trailId)}<option value="__new">New trail from this to-do…</option>`;
+  if (sel && document.activeElement !== sel && sel.dataset.markup !== options) { sel.innerHTML = options; sel.dataset.markup = options; }
   const sess = t.sessionIds.map(session).filter(Boolean);
   const runs = t.runIds.map(run).filter(Boolean);
   if (!box.querySelector('ul')) box.innerHTML = '<label>Linked work</label><ul class="list"></ul>';
   patchList(box.querySelector('ul'), sess.length + runs.length === 0
     ? '<li class="empty" style="padding-left:0">None yet. Start a session or hand it off.</li>'
     : `${sess.map(sessionRow).join('')}${runs.map(runRow).join('')}`);
+}
+
+// ---------- trail view ----------
+const LONG_NOTES_WORDS = 2000;
+const wordCount = text => (String(text || '').match(/\S+/g) || []).length;
+const TRAIL_PILL = { waiting: 'Needs you', idle: 'Your turn', working: 'Working', bg: 'Running in the background' };
+
+function renderTrail(header, panel) {
+  const tr = trail(S.view.id);
+  if (!tr) return navigate({ type: 'home' });
+  const archived = tr.status === 'archived';
+  header.dataset.status = tr.status;
+  header.innerHTML = `
+    <span class="h-title" id="trail-h-title">${esc(tr.title)}</span>
+    <span id="trail-pill"></span>
+    <span class="h-path" id="trail-path"></span>
+    <span class="spacer"></span>
+    <span id="trail-start" class="contents"></span>
+    <button class="btn" data-act="trail-handoff">${ICON.handoff}Hand off</button>
+    <button class="btn ghost" data-act="trail-archive">${archived ? `${ICON.resume}Unarchive` : `${ICON.archive}Archive`}</button>
+    <button class="btn danger" data-act="trail-delete">${ICON.trash}Delete</button>`;
+  panel.innerHTML = `<div class="todo-view trail-view">
+    <div id="trail-suggestions"></div>
+    <div class="field"><label>Notes <span class="hint">shared context: every session on this trail starts with them</span></label>
+      <textarea id="trail-notes" spellcheck="false" placeholder="What every session on this trail should know: the goal, the repos and folders, the ticket or epic, decisions made and why, gotchas, who owns what.">${esc(tr.notes)}</textarea>
+      <p class="help" id="trail-notes-help"></p></div>
+    <div class="field"><label>Title</label><input type="text" id="trail-title" value="${esc(tr.title)}"></div>
+    <div class="field"><label>Working directory</label><div class="inline"><input type="text" id="trail-cwd" value="${esc(tr.cwd || '')}" placeholder="${esc(S.data.config.defaultCwd)}"><button class="btn" data-act="pick-trail-cwd">Browse…</button></div>
+      <p class="help">Where its sessions and hand-offs start, unless a to-do has a folder of its own.</p></div>
+    <div class="field links"><label>To-dos</label><ul class="list" id="trail-todos"></ul>
+      <form id="trail-add-todo" class="inline-add" autocomplete="off">${ICON.plus}<input placeholder="Add a to-do to this trail" spellcheck="false"></form></div>
+    <div class="field links"><label>Sessions</label><ul class="list" id="trail-sessions"></ul></div>
+    <div class="field links" id="trail-runs-field"><label>Background runs</label><ul class="list" id="trail-runs"></ul></div>
+  </div>`;
+
+  const notes = $('#trail-notes');
+  notes.dataset.base = tr.notes;
+  const notesHelp = () => {
+    const n = wordCount(notes.value);
+    $('#trail-notes-help').innerHTML = `${n ? `${n.toLocaleString()} word${n === 1 ? '' : 's'}. ` : ''}Sessions on this trail suggest additions as they learn things; you accept them above. Ask Claude to “add this to the trail” to write one right away.`
+      + (n > LONG_NOTES_WORDS ? ' <span class="warn">Long notes take up context in every session; consider trimming them.</span>' : '');
+  };
+  notes.addEventListener('input', notesHelp);
+  // Lines a session added while this was being edited are kept: they're appended after the edit.
+  notes.addEventListener('change', () => {
+    const cur = trail(tr.id)?.notes ?? '';
+    const base = notes.dataset.base;
+    let value = notes.value;
+    if (cur !== base && cur.startsWith(base)) value = `${value.replace(/\s+$/, '')}\n${cur.slice(base.length).replace(/^\s+/, '')}`;
+    notes.dataset.base = value;
+    if (value !== notes.value) notes.value = value;
+    api.invoke('trail:update', tr.id, { notes: value });
+  });
+  notesHelp();
+  const save = patch => api.invoke('trail:update', tr.id, patch);
+  $('#trail-title').addEventListener('change', e => { const v = e.target.value.trim(); if (v) save({ title: v }); });
+  $('#trail-cwd').addEventListener('change', e => save({ cwd: e.target.value.trim() || null }));
+  $('#trail-add-todo').addEventListener('submit', async e => {
+    e.preventDefault();
+    const input = e.target.querySelector('input');
+    const title = input.value.trim();
+    if (!title) return;
+    input.value = '';
+    await api.invoke('todo:add', { title, trailId: tr.id });
+  });
+  renderTrailLive();
+}
+
+// The parts of the trail view that follow state pushes. Text being edited (the notes, a
+// suggestion) is never replaced under the cursor.
+function renderTrailLive() {
+  const tr = trail(S.view.id);
+  if (!tr || !$('#trail-notes')) return;
+  const setHtml = (el, markup) => { if (el && el.dataset.markup !== markup) { el.innerHTML = markup; el.dataset.markup = markup; } };
+  if ($('#view-header').dataset.status !== tr.status) { renderMain(); return; }
+  $('#trail-h-title').textContent = tr.title;
+  const dot = trailDot(tr);
+  setHtml($('#trail-pill'), dot !== 'none' ? `<span class="pill ${dot}"><i></i>${TRAIL_PILL[dot]}</span>`
+    : tr.status === 'archived' ? '<span class="pill neutral"><i></i>Archived</span>' : '');
+  setHtml($('#trail-path'), `${ICON.folder}${esc(shortDir(tr.cwd || S.data.config.defaultCwd))}`);
+  const work = trailWork(tr);
+  setHtml($('#trail-start'), `${work ? `<button class="btn primary" data-act="trail-goto-work">${workIcon(work)}Go to ${work.type === 'session' ? 'session' : 'run'}</button>` : ''}`
+    + `<button class="btn ${work ? '' : 'primary'}" data-act="trail-start-current">${ICON.play}New session</button>`);
+
+  const notes = $('#trail-notes');
+  if (document.activeElement !== notes && notes.value === notes.dataset.base && tr.notes !== notes.dataset.base) {
+    notes.value = tr.notes;
+    notes.dataset.base = tr.notes;
+    notes.dispatchEvent(new Event('input'));
+  }
+
+  // Suggestions: rebuilt only when the set changes, keeping any edits in progress.
+  const box = $('#trail-suggestions');
+  const sugs = tr.suggestions || [];
+  const key = sugs.map(x => x.id).join(',');
+  if (box.dataset.key !== key) {
+    const edits = new Map([...box.querySelectorAll('[data-sugg]')].map(el => [el.dataset.sugg, el.querySelector('textarea').value]));
+    box.dataset.key = key;
+    box.innerHTML = !sugs.length ? '' : `<div class="suggestions">
+      <div class="ap-head">${ICON.note}<b>Suggested for the notes</b><span class="h-meta">by sessions on this trail · edit before adding if you like</span></div>
+      ${sugs.map(x => `<div class="sugg" data-sugg="${esc(x.id)}">
+        <textarea rows="${Math.min(6, Math.max(1, Math.ceil(x.text.length / 110)))}" spellcheck="false">${esc(edits.get(x.id) ?? x.text)}</textarea>
+        <div class="sugg-foot"><span class="h-meta">${x.sessionTitle ? `From “${esc(x.sessionTitle)}” · ` : ''}${agoText(x.createdAt)}</span><span class="spacer"></span>
+          <button class="btn sm primary" data-act="sug-accept">${ICON.check}Add to notes</button><button class="btn sm ghost" data-act="sug-dismiss">Dismiss</button></div>
+      </div>`).join('')}
+    </div>`;
+  }
+
+  const todos = trailTodos(tr);
+  const open = todos.filter(t => t.status === 'open').sort(byOrder);
+  const done = todos.filter(t => t.status === 'done').sort((a, b) => (b.doneAt || '').localeCompare(a.doneAt || '')).slice(0, 8);
+  patchList($('#trail-todos'), [...open, ...done].map(todoRow).join('') || '<li class="empty" style="padding-left:0">No to-dos on this trail yet.</li>');
+  const sess = trailSessions(tr).sort((a, b) => (b.live - a.live) || (b.lastActivityAt || '').localeCompare(a.lastActivityAt || ''));
+  patchList($('#trail-sessions'), sess.slice(0, 15).map(sessionRow).join('')
+    + (sess.length > 15 ? `<li class="empty" style="padding-left:0">and ${sess.length - 15} older</li>` : '')
+    || '<li class="empty" style="padding-left:0">None yet. Start one, or add a session to this trail from its header.</li>');
+  const runs = trailRuns(tr).sort((a, b) => (b.startedAt || '').localeCompare(a.startedAt || ''));
+  $('#trail-runs-field').hidden = !runs.length;
+  patchList($('#trail-runs'), runs.slice(0, 10).map(runRow).join(''));
 }
 
 function renderHome(header, panel) {
@@ -747,26 +969,51 @@ function wireDirField(m) {
   return input;
 }
 
-function startModal(todoIds = []) {
+// The trail picker of the start and hand-off dialogs; picking a trail moves the folder to the
+// trail's, unless it was changed by hand.
+function trailField(selected) {
+  if (!(S.data.trails || []).length) return '';
+  return `<div class="field"><label>Trail</label><select name="trail">${trailOptions(selected)}</select>
+    <p class="help">Claude gets the trail’s notes as context.</p></div>`;
+}
+function wireTrailField(m, cwdInput, todos) {
+  const sel = m.querySelector('select[name=trail]');
+  if (!sel) return () => undefined;
+  let autoCwd = cwdInput.value;
+  sel.addEventListener('change', () => {
+    if (cwdInput.value !== autoCwd || todos.some(t => t.cwd)) return;
+    autoCwd = trail(sel.value)?.cwd || S.data.recentDirs[0] || S.data.config.defaultCwd;
+    cwdInput.value = autoCwd;
+  });
+  return () => sel.value || null;
+}
+
+function startModal(todoIds = [], { trailId } = {}) {
   const todos = todoIds.map(todo).filter(Boolean);
+  const selected = trailId !== undefined ? trailId : todos.map(t => t.trailId).find(Boolean) || null;
+  const tr = trail(selected);
   const title = todos.length === 1 ? todos[0].title : todos.length ? todos.map(t => t.title).join(' + ').slice(0, 80) : '';
-  const cwd = todos.find(t => t.cwd)?.cwd || S.data.recentDirs[0] || S.data.config.defaultCwd;
+  const cwd = todos.find(t => t.cwd)?.cwd || tr?.cwd || S.data.recentDirs[0] || S.data.config.defaultCwd;
   modal(`
-    <h2>${todos.length ? 'Start a session' : 'New session'}</h2>
+    <h2>${todos.length ? 'Start a session' : tr && trailId ? `New session on “${esc(tr.title)}”` : 'New session'}</h2>
     ${todos.length ? `<div class="sub">For: ${todos.map(t => esc(t.title)).join(' · ')}. Claude gets the to-do${todos.length > 1 ? 's' : ''} as context.</div>` : ''}
     <div class="field"><label>Name</label><input type="text" name="title" value="${esc(title)}" placeholder="Optional"></div>
+    ${trailField(selected)}
     ${dirField(cwd)}
     <div class="field"><label>First message</label><textarea name="first" rows="3" placeholder="Optional. Leave empty to start typing in the session."></textarea></div>
     <footer><button class="btn ghost" data-close>Cancel</button><button class="btn primary" data-go>${ICON.play}Start <kbd>${SUBMIT_KEY}</kbd></button></footer>
   `, (m, close) => {
     const cwdInput = wireDirField(m);
+    const pickedTrail = wireTrailField(m, cwdInput, todos);
     const go = async () => {
       let id;
       try {
-        id = await api.invoke('session:create', {
+        const opts = {
           cwd: cwdInput.value.trim(), title: m.querySelector('[name=title]').value.trim() || null,
           todoIds, firstMessage: m.querySelector('[name=first]').value,
-        });
+        };
+        if (m.querySelector('select[name=trail]')) opts.trailId = pickedTrail();
+        id = await api.invoke('session:create', opts);
       } catch (err) { return flashError(err); }
       close();
       S.selected.clear();
@@ -780,13 +1027,16 @@ function startModal(todoIds = []) {
   });
 }
 
-function handoffModal(todoIds) {
+// From a trail (no to-dos) the instructions are the task, and the run gets the trail's notes.
+function handoffModal(todoIds, { trailId } = {}) {
   const todos = todoIds.map(todo).filter(Boolean);
-  const cwd = todos.find(t => t.cwd)?.cwd || S.data.recentDirs[0] || S.data.config.defaultCwd;
+  const tr = trail(trailId !== undefined ? trailId : todos.map(t => t.trailId).find(Boolean));
+  const cwd = todos.find(t => t.cwd)?.cwd || tr?.cwd || S.data.recentDirs[0] || S.data.config.defaultCwd;
+  const forTrail = !todos.length && tr;
   modal(`
     <h2>Hand off to a background run</h2>
-    <div class="sub">${todos.map(t => esc(t.title)).join(' · ')}<br>It investigates and drafts, never edits, pushes or sends, and asks you before anything else. You'll get a notification when it's ready or needs you.</div>
-    <div class="field"><label>Instructions</label><textarea name="instructions" rows="5" placeholder="Optional. What should it look at, what should the draft be?"></textarea></div>
+    <div class="sub">${forTrail ? `For the trail “${esc(tr.title)}”; it gets the trail’s notes.` : `${todos.map(t => esc(t.title)).join(' · ')}${tr ? `<br>On the trail “${esc(tr.title)}”; it gets the trail’s notes too.` : ''}`}<br>It investigates and drafts, never edits, pushes or sends, and asks you before anything else. You'll get a notification when it's ready or needs you.</div>
+    <div class="field"><label>${forTrail ? 'What should it do?' : 'Instructions'}</label><textarea name="instructions" rows="5" placeholder="${forTrail ? 'What to investigate or draft.' : 'Optional. What should it look at, what should the draft be?'}"></textarea></div>
     ${dirField(cwd)}
     ${toggle('handoff-allow-all', false, 'Allow everything it asks for', ALLOW_ALL_HELP)}
     <footer><button class="btn ghost" data-close>Cancel</button><button class="btn primary" data-go>${ICON.handoff}Hand off <kbd>${SUBMIT_KEY}</kbd></button></footer>
@@ -799,12 +1049,13 @@ function handoffModal(todoIds) {
           instructions: m.querySelector('[name=instructions]').value.trim(),
           cwd: cwdInput.value.trim() || null,
           allowAll: m.querySelector('#handoff-allow-all').checked,
+          ...(forTrail ? { trailId: tr.id } : {}),
         });
       } catch (err) { return flashError(err); }
       close();
       S.selected.clear();
       renderSidebar();
-      flash(`Handed off: ${todos.length === 1 ? todos[0].title : `${todos.length} to-dos`}`, { type: 'run', id });
+      flash(`Handed off: ${forTrail ? tr.title : todos.length === 1 ? todos[0].title : `${todos.length} to-dos`}`, { type: 'run', id });
     };
     m.querySelector('[data-go]').addEventListener('click', go);
     m.querySelector('[data-close]').addEventListener('click', close);
@@ -824,6 +1075,76 @@ function linkTodoModal(sessionId) {
     m.querySelectorAll('[data-pick]').forEach(r => r.addEventListener('click', async () => { await api.invoke('session:link', sessionId, r.dataset.pick); close(); }));
     m.querySelector('[data-close]').addEventListener('click', close);
     m.addEventListener('keydown', e => { if (e.key === 'Escape') close(); });
+  });
+}
+
+// Put a session on a trail (or a new one, made from it), move it, or take it off.
+function trailPickModal(sessionId) {
+  const s = session(sessionId);
+  if (!s) return;
+  const cur = trail(s.trailId);
+  const list = activeTrails().filter(t => t.id !== s.trailId);
+  modal(`
+    <h2>${cur ? 'Move this session to another trail' : 'Add this session to a trail'}</h2>
+    <div class="sub">${cur ? `It’s on “${esc(cur.title)}”. ` : ''}${s.live ? 'It gets the trail’s notes the next time it starts or resumes; until then Claude can already read them and suggest additions.' : 'It gets the trail’s notes when you resume it.'}</div>
+    ${list.length ? `<ul class="list pick-list" style="padding:0">${list.map(t => `<li class="row" data-pick="${esc(t.id)}">${dotHtml(trailDot(t))}<div class="main"><div class="title">${esc(t.title)}</div><div class="sub">${esc(trailSub(t))}</div></div></li>`).join('')}</ul>` : ''}
+    <form class="field" data-new-trail autocomplete="off"><label>New trail</label>
+      <div class="inline"><input type="text" name="title" value="${esc(!cur && !list.length ? s.title || '' : '')}" placeholder="Name it after the work, e.g. AP Pool v2" spellcheck="false"><button class="btn" type="submit">${ICON.plus}Create</button></div></form>
+    <footer>${cur ? `<button class="btn ghost" data-remove>Take it off “${esc(cur.title.slice(0, 30))}”</button>` : ''}<span class="spacer"></span><button class="btn ghost" data-close>Close</button></footer>
+  `, (m, close) => {
+    const done = async (trailId, text) => {
+      await api.invoke('session:setTrail', sessionId, trailId);
+      close();
+      flash(text, trailId ? { type: 'trail', id: trailId } : null);
+    };
+    m.querySelectorAll('[data-pick]').forEach(r => r.addEventListener('click', () => done(r.dataset.pick, `Moved to “${trail(r.dataset.pick)?.title}”`)));
+    m.querySelector('[data-new-trail]').addEventListener('submit', async e => {
+      e.preventDefault();
+      const title = e.target.querySelector('input').value.trim();
+      if (!title) return;
+      const tr = await api.invoke('trail:add', { title, cwd: s.cwd, sessionId });
+      close();
+      flash(`Started the trail “${tr.title}”. Open it to write its notes.`, { type: 'trail', id: tr.id }, { ms: 6000 });
+    });
+    m.querySelector('[data-remove]')?.addEventListener('click', () => done(null, `Taken off “${cur.title}”`));
+    m.querySelector('[data-close]').addEventListener('click', close);
+    m.addEventListener('keydown', e => { if (e.key === 'Escape') close(); });
+    m.querySelector('[name=title]').focus();
+  });
+}
+
+// "What's new": the changelog sections since the version last seen. Rendered from a small
+// subset of Markdown: ### headings, - bullets, **bold** and `code`.
+function changelogHtml(body) {
+  const inline = t => esc(t).replace(/\*\*([^*\n]+)\*\*/g, '<b>$1</b>').replace(/`([^`\n]+)`/g, '<code>$1</code>');
+  let html = '';
+  let inList = false;
+  for (const raw of body.split('\n')) {
+    const line = raw.trimEnd();
+    const item = line.match(/^\s*[-*] (.*)$/);
+    if (item) { html += `${inList ? '' : '<ul>'}<li>${inline(item[1])}</li>`; inList = true; continue; }
+    if (inList && /^\s{2,}\S/.test(line)) { html = html.replace(/<\/li>$/, ` ${inline(line.trim())}</li>`); continue; }
+    if (inList) { html += '</ul>'; inList = false; }
+    const h = line.match(/^#{3,4} (.*)$/);
+    if (h) html += `<h4>${inline(h[1])}</h4>`;
+    else if (line.trim()) html += `<p>${inline(line)}</p>`;
+  }
+  return inList ? `${html}</ul>` : html;
+}
+
+function whatsNewModal(info, { all = false } = {}) {
+  const many = all || info.sections.length > 1;
+  modal(`
+    <h2>${ICON.sparkle}${all ? 'What’s new in Stroll' : `What’s new in Stroll ${esc(info.version)}`}</h2>
+    <div class="whats-new">${info.sections.map(x => `<div class="wn-section">
+      ${many ? `<h3>${esc(x.version)}${x.date ? `<span class="h-meta">${esc(x.date)}</span>` : ''}</h3>` : ''}
+      <div class="wn-body">${changelogHtml(x.body)}</div></div>`).join('')}</div>
+    <footer><button class="btn primary" data-close>Got it</button></footer>
+  `, (m, close) => {
+    m.classList.add('wide');
+    m.querySelector('[data-close]').addEventListener('click', close);
+    m.addEventListener('keydown', e => { if (e.key === 'Escape' || e.key === 'Enter') close(); });
+    m.querySelector('[data-close]').focus();
   });
 }
 
@@ -906,6 +1227,8 @@ document.addEventListener('click', async e => {
   const rowEl = e.target.closest('[data-kind]');
   const gotoTodo = e.target.closest('[data-goto-todo]');
   if (gotoTodo) return navigate({ type: 'todo', id: gotoTodo.dataset.gotoTodo });
+  const gotoTrail = e.target.closest('[data-goto-trail]');
+  if (gotoTrail) return navigate({ type: 'trail', id: gotoTrail.dataset.gotoTrail });
 
   if (actEl) {
     const act = actEl.dataset.act;
@@ -937,6 +1260,40 @@ document.addEventListener('click', async e => {
         return undefined;
       }
       case 'link-todo': return linkTodoModal(S.view.id);
+      case 'session-trail': return trailPickModal(S.view.id);
+      case 'trail-start': return startModal([], { trailId: id });
+      case 'trail-start-current': return startModal([], { trailId: S.view.id });
+      case 'trail-goto-work': {
+        const work = trail(S.view.id) && trailWork(trail(S.view.id));
+        return work ? navigate(work) : undefined;
+      }
+      case 'trail-handoff': return handoffModal([], { trailId: S.view.id });
+      case 'trail-archive': {
+        const tr = trail(S.view.id);
+        const archive = tr.status !== 'archived';
+        await api.invoke('trail:update', tr.id, { status: archive ? 'archived' : 'active' });
+        return flash(archive ? `Archived “${tr.title}”. Its sessions and to-dos stay as they are.` : `“${tr.title}” is active again`);
+      }
+      case 'trail-delete': {
+        const tr = trail(S.view.id);
+        if (await confirmModal({ title: `Delete “${tr.title}”?`, body: 'Its notes go. Its sessions, to-dos and runs stay, without a trail. Archive it instead to keep the notes.', confirm: 'Delete', danger: true })) {
+          await api.invoke('trail:delete', tr.id);
+          navigate({ type: 'home' });
+        }
+        return undefined;
+      }
+      case 'pick-trail-cwd': {
+        const d = await api.invoke('dialog:pickDir', $('#trail-cwd').value);
+        if (d) { $('#trail-cwd').value = d; api.invoke('trail:update', S.view.id, { cwd: d }); }
+        return undefined;
+      }
+      case 'sug-accept': case 'sug-dismiss': {
+        const box = actEl.closest('[data-sugg]');
+        if (!box) return undefined;
+        const accept = act === 'sug-accept';
+        await api.invoke('trail:suggestion', S.view.id, box.dataset.sugg, accept, accept ? box.querySelector('textarea').value : null);
+        return accept ? flash('Added to the notes', null, { ms: 1800 }) : undefined;
+      }
       case 'mark-unread': return api.invoke('session:markRead', S.view.id, false);
       case 'restore-all': {
         const toResume = S.data.sessions.filter(s => !s.live && s.restorable);
@@ -1070,9 +1427,10 @@ document.addEventListener('click', e => {
 function closeMenu() { document.querySelector('.ctx-menu')?.remove(); }
 document.addEventListener('contextmenu', e => {
   closeMenu();
-  const row = e.target.closest('[data-kind="session"], [data-kind="run"]');
+  const row = e.target.closest('[data-kind="session"], [data-kind="run"], [data-kind="trail"]');
   if (!row) return;
   const { kind, id } = row.dataset;
+  if (kind === 'trail') return trailMenu(e, id);
   const item = kind === 'session' ? session(id) : run(id);
   if (!item) return;
   const dot = kind === 'session' ? sessionDot(item) : runDot(item);
@@ -1080,6 +1438,7 @@ document.addEventListener('contextmenu', e => {
   if (dot === 'idle' || dot === 'waiting') items.push([`${ICON.read}Mark as read`, () => api.invoke(`${kind}:markRead`, id, true)]);
   else if ((dot === 'none' || dot === 'bg') && (kind === 'session' ? item.live : item.status !== 'running')) items.push([`${ICON.unread}Mark as unread`, () => api.invoke(`${kind}:markRead`, id, false)]);
   if (kind === 'session') items.push([item.muted ? `${ICON.bell}Unmute notifications` : `${ICON.mute}Mute notifications`, () => api.invoke('session:mute', id, !item.muted)]);
+  if (kind === 'session') items.push([`${ICON.trail}${item.trailId ? 'Move to another trail…' : 'Add to a trail…'}`, () => trailPickModal(id)]);
   items.push([`${ICON.list}Save as workflow`, async () => {
     const w = await api.invoke(kind === 'session' ? 'workflow:fromSession' : 'workflow:fromRun', id);
     if (!w) return;
@@ -1087,6 +1446,19 @@ document.addEventListener('contextmenu', e => {
     flash('Saved as a workflow. Mark what changes each time with {{name}}.');
   }]);
   if (kind === 'run' && item.status !== 'running') items.push([`${ICON.trash}Remove`, async () => { await api.invoke('run:forget', id); if (S.view.type === 'run' && S.view.id === id) navigate({ type: 'home' }); }]);
+  showMenu(e, items);
+});
+
+function trailMenu(e, id) {
+  const tr = trail(id);
+  if (!tr) return;
+  showMenu(e, [
+    [`${ICON.play}New session`, () => startModal([], { trailId: id })],
+    [tr.status === 'archived' ? `${ICON.resume}Unarchive` : `${ICON.archive}Archive`, () => api.invoke('trail:update', id, { status: tr.status === 'archived' ? 'active' : 'archived' })],
+  ]);
+}
+
+function showMenu(e, items) {
   if (!items.length) return;
   e.preventDefault();
   const menu = document.createElement('div');
@@ -1100,7 +1472,7 @@ document.addEventListener('contextmenu', e => {
     closeMenu();
   });
   document.body.appendChild(menu);
-});
+}
 document.addEventListener('mousedown', e => { if (!e.target.closest('.ctx-menu')) closeMenu(); });
 document.addEventListener('keydown', e => { if (e.key === 'Escape') closeMenu(); });
 
@@ -1127,20 +1499,32 @@ $('#quick-add-input').addEventListener('keydown', e => {
 });
 $('#home-btn').addEventListener('click', () => navigate({ type: 'home' }));
 $('#new-session-btn').addEventListener('click', () => startModal([]));
+$('#new-trail-btn').addEventListener('click', async () => {
+  const tr = await api.invoke('trail:add', {});
+  navigate({ type: 'trail', id: tr.id });
+  setTimeout(() => { $('#trail-title')?.focus(); $('#trail-title')?.select(); }, 100);
+});
 $('#new-workflow-btn').addEventListener('click', async () => {
   const w = await api.invoke('workflow:add', {});
   navigate({ type: 'workflow', id: w.id });
   setTimeout(() => $('#wf-name')?.select(), 100);
 });
 // ---------- sidebar sections: collapse (click the header) and reorder (drag it), kept in config
-const SECTION_KEYS = ['todos', 'sessions', 'runs', 'workflows', 'recent'];
+const SECTION_KEYS = ['todos', 'trails', 'sessions', 'runs', 'workflows', 'recent'];
 const SECTION_MIME = 'application/x-stroll-section';
 const sectionOpen = key => !sidebarPrefs().collapsed.has(key);
 
+// A section added in a later version goes after the one it follows by default, not at the end.
+// `expanded` holds the sub-lists that start closed (archived trails).
 function sidebarPrefs() {
   const sb = S.data?.config?.sidebar || {};
-  const saved = (sb.order || []).filter(k => SECTION_KEYS.includes(k));
-  return { order: [...saved, ...SECTION_KEYS.filter(k => !saved.includes(k))], collapsed: new Set(sb.collapsed || []) };
+  const order = (sb.order || []).filter((k, i, a) => SECTION_KEYS.includes(k) && a.indexOf(k) === i);
+  SECTION_KEYS.forEach((k, i) => {
+    if (order.includes(k)) return;
+    const prev = SECTION_KEYS.slice(0, i).reverse().find(p => order.includes(p));
+    order.splice(prev ? order.indexOf(prev) + 1 : 0, 0, k);
+  });
+  return { order, collapsed: new Set(sb.collapsed || []), expanded: new Set(sb.expanded || []) };
 }
 
 function applySidebarLayout() {
@@ -1160,10 +1544,11 @@ const sidebarBox = $('#sidebar-scroll');
 sidebarBox.addEventListener('click', e => {
   const sub = e.target.closest('[data-sub-toggle]');
   if (sub && !e.target.closest('button')) {
-    const { collapsed } = sidebarPrefs();
     const key = sub.dataset.subToggle;
-    if (collapsed.has(key)) collapsed.delete(key); else collapsed.add(key);
-    saveSidebar({ collapsed: [...collapsed] });
+    const field = sub.dataset.subDefault === 'closed' ? 'expanded' : 'collapsed';
+    const set = sidebarPrefs()[field];
+    if (set.has(key)) set.delete(key); else set.add(key);
+    saveSidebar({ [field]: [...set] });
     renderSidebar();
     return;
   }
@@ -1287,6 +1672,9 @@ api.on('state:changed', data => {
   } else if (v.type === 'workflow') {
     if (!workflow(v.id)) navigate({ type: 'home' });
     else renderWorkflowLive();
+  } else if (v.type === 'trail') {
+    if (!trail(v.id)) navigate({ type: 'home' });
+    else renderTrailLive();
   } else if (v.type === 'run') {
     const r = run(v.id);
     if (!r) navigate({ type: 'home' });
@@ -1574,7 +1962,7 @@ function renderSettings(header, panel) {
     </section>
     <section class="set-group"><h3>Updates</h3>
       ${toggle('set-updates', c.updates.check, 'Check for updates automatically', 'Stroll checks its git repository every few hours.')}
-      <div class="actions"><button class="btn" data-set="check-updates">${ICON.download}Check now</button></div>
+      <div class="actions"><button class="btn" data-set="check-updates">${ICON.download}Check now</button><button class="btn ghost" data-set="whats-new">${ICON.sparkle}What’s new</button></div>
     </section>
   </div>`;
 
@@ -1597,6 +1985,10 @@ function renderSettings(header, panel) {
   bind('#set-model', 'change', e => save({ background: { model: e.target.value.trim() || null } }));
   bind('#set-extra-rules', 'change', e => save({ background: { extraAllowedTools: e.target.value.split('\n').map(l => l.trim()).filter(Boolean) } }));
   bind('#set-updates', 'change', e => save({ updates: { check: e.target.checked } }));
+  bind('[data-set="whats-new"]', 'click', async () => {
+    const info = await api.invoke('app:whatsNew', true);
+    if (info) whatsNewModal(info, { all: true }); else flash('No release notes found');
+  });
   bind('[data-set="check-updates"]', 'click', async () => {
     S.update = await api.invoke('app:checkUpdates');
     renderBanner();
@@ -1662,4 +2054,7 @@ $('#settings-btn').addEventListener('click', () => navigate({ type: 'settings' }
   if (sectionOpen('recent')) refreshRecent();
   renderBanner();
   navigate(pendingView || { type: 'home' });
+  // Once per version: what changed since the version this user last saw.
+  const news = await api.invoke('app:whatsNew', false).catch(() => null);
+  if (news && !$('#modal-root').children.length) whatsNewModal(news);
 })();

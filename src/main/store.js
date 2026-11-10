@@ -4,12 +4,14 @@ const { EventEmitter } = require('events');
 const { writePrivate } = require('./config');
 
 const now = () => new Date().toISOString();
+const pad = n => String(n).padStart(2, '0');
+const localDate = (d = new Date()) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 const DAY = 24 * 60 * 60 * 1000;
 const KEEP_CLOSED_SESSIONS = 100;
 const KEEP_FINISHED_RUNS_DAYS = 30;
 
 function emptyState() {
-  return { version: 1, todos: [], sessions: [], runs: [], workflows: [], recentDirs: [] };
+  return { version: 1, todos: [], sessions: [], runs: [], workflows: [], trails: [], recentDirs: [] };
 }
 
 // Single writer: the app owns state.json. The MCP server goes through the app's HTTP API.
@@ -17,6 +19,8 @@ class Store extends EventEmitter {
   constructor(file) {
     super();
     this.file = file;
+    // A first launch (no state yet) has nothing to catch up on in "What's new".
+    this.fresh = !fs.existsSync(file);
     this.state = this.load();
     this.saveTimer = null;
   }
@@ -76,11 +80,14 @@ class Store extends EventEmitter {
   // --- to-dos ---
   todo(id) { return this.state.todos.find(t => t.id === id); }
 
-  addTodo({ title, notes = '', remindAt = null, cwd = null, sessionId = null }) {
+  // A to-do added from a session on a trail lands in that trail unless told otherwise.
+  addTodo({ title, notes = '', remindAt = null, cwd = null, sessionId = null, trailId }) {
+    const trail = trailId === undefined ? this.session(sessionId)?.trailId : trailId;
     const t = {
       id: crypto.randomUUID(), title: String(title).trim(), notes, status: 'open',
       order: Math.max(-1, ...this.state.todos.map(x => x.order ?? 0)) + 1,
       createdAt: now(), doneAt: null, remindAt, remindedAt: null, remindAck: false, cwd,
+      trailId: this.trail(trail) ? trail : null,
       sessionIds: [], runIds: [],
     };
     this.state.todos.push(t);
@@ -92,8 +99,9 @@ class Store extends EventEmitter {
   updateTodo(id, patch) {
     const t = this.todo(id);
     if (!t) return null;
-    const allowed = ['title', 'notes', 'remindAt', 'cwd', 'status', 'order'];
+    const allowed = ['title', 'notes', 'remindAt', 'cwd', 'status', 'order', 'trailId'];
     for (const k of allowed) if (k in patch) t[k] = patch[k];
+    if ('trailId' in patch && !this.trail(t.trailId)) t.trailId = null;
     if ('remindAt' in patch) { t.remindedAt = null; t.remindAck = false; }
     if ('status' in patch) t.doneAt = patch.status === 'done' ? now() : null;
     this.changed();
@@ -208,6 +216,80 @@ class Store extends EventEmitter {
   deleteWorkflow(id) {
     this.state.workflows = this.state.workflows.filter(w => w.id !== id);
     this.changed();
+  }
+
+  // --- trails: sessions about the same piece of work, sharing the trail's notes ---
+  // Membership lives on the members (trailId on to-dos, sessions and runs), never in a list on
+  // the trail, so there's nothing to keep in sync when one of them goes.
+  trail(id) { return id ? this.state.trails.find(t => t.id === id) : undefined; }
+
+  addTrail({ title = 'New trail', notes = '', cwd = null } = {}) {
+    const t = {
+      id: crypto.randomUUID(), title: String(title).trim() || 'New trail', notes: String(notes || ''), cwd: cwd || null,
+      status: 'active', order: Math.max(-1, ...this.state.trails.map(x => x.order ?? 0)) + 1,
+      createdAt: now(), updatedAt: now(), archivedAt: null, suggestions: [],
+    };
+    this.state.trails.push(t);
+    this.changed();
+    return t;
+  }
+
+  updateTrail(id, patch) {
+    const t = this.trail(id);
+    if (!t) return null;
+    for (const k of ['title', 'notes', 'cwd', 'status', 'order']) if (k in patch) t[k] = patch[k];
+    if ('status' in patch) t.archivedAt = patch.status === 'archived' ? now() : null;
+    t.updatedAt = now();
+    this.changed();
+    return t;
+  }
+
+  deleteTrail(id) {
+    this.state.trails = this.state.trails.filter(t => t.id !== id);
+    for (const list of [this.state.todos, this.state.sessions, this.state.runs]) for (const x of list) if (x.trailId === id) x.trailId = null;
+    this.changed();
+  }
+
+  // Appends a dated line to the notes; the user's own text above it is left as it is.
+  appendTrailNote(id, text) {
+    const t = this.trail(id);
+    const body = String(text || '').trim();
+    if (!t || !body) return null;
+    const line = `- [${localDate()}] ${body.replace(/\n/g, '\n  ')}`;
+    const notes = t.notes.replace(/\s+$/, '');
+    t.notes = notes ? `${notes}\n${line}` : line;
+    t.updatedAt = now();
+    this.changed();
+    return t;
+  }
+
+  suggestTrailNote(id, text, sessionId = null) {
+    const t = this.trail(id);
+    const body = String(text || '').trim();
+    if (!t || !body) return null;
+    const s = { id: crypto.randomUUID(), text: body, sessionId, sessionTitle: this.session(sessionId)?.title || null, createdAt: now() };
+    t.suggestions.push(s);
+    this.changed();
+    return s;
+  }
+
+  // Accept (optionally with the user's edits) appends it to the notes; dismiss drops it.
+  resolveSuggestion(trailId, suggestionId, accept, text = null) {
+    const t = this.trail(trailId);
+    const s = t?.suggestions.find(x => x.id === suggestionId);
+    if (!s) return null;
+    t.suggestions = t.suggestions.filter(x => x.id !== suggestionId);
+    if (accept) this.appendTrailNote(trailId, text ?? s.text);
+    else this.changed();
+    return t;
+  }
+
+  setSessionTrail(sessionId, trailId) {
+    const s = this.session(sessionId);
+    if (!s) return null;
+    s.trailId = this.trail(trailId) ? trailId : null;
+    this.changed();
+    return s;
   }
 
   rememberDir(dir) {
