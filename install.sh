@@ -36,6 +36,26 @@ BIN_DIR="$HOME/.local/bin"
 mkdir -p "$BIN_DIR"
 chmod +x bin/stroll
 ln -sf "$PWD/bin/stroll" "$BIN_DIR/stroll"
+
+if [ "$OS" = "Linux" ]; then
+  # A desktop entry puts Stroll in the app menu and gives its window Stroll's icon in the dock.
+  APPS_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/applications"
+  mkdir -p "$APPS_DIR"
+  cat > "$APPS_DIR/stroll.desktop" <<EOF
+[Desktop Entry]
+Type=Application
+Name=Stroll
+Comment=A session manager for Claude Code
+Exec="$BIN_DIR/stroll"
+Icon=$PWD/assets/icon.png
+Terminal=false
+Categories=Development;
+StartupWMClass=stroll
+EOF
+  if command -v update-desktop-database >/dev/null 2>&1; then
+    update-desktop-database "$APPS_DIR" >/dev/null 2>&1 || true
+  fi
+fi
 case ":$PATH:" in
   *":$BIN_DIR:"*) ;;
   *) RC="$HOME/.zshrc"; [ "$OS" = "Linux" ] && RC="$HOME/.bashrc"
