@@ -26,12 +26,20 @@
       <nav class="nav">
         <button type="button" id="home-btn" class="nav-item" title="Overview (⌘0)"><span class="nav-icon" data-icon="overview"></span><span>Overview</span><span class="nav-count" id="nav-needs"></span></button>
       </nav>
-      <form id="quick-add" autocomplete="off">
+      <div id="search" class="side-input" role="search">
+        <span class="qa-icon" data-icon="search"></span>
+        <input id="search-input" placeholder="Search" spellcheck="false" autocomplete="off">
+        <span class="count" id="search-count"></span>
+        <button type="button" id="search-clear" class="icon-btn" title="Clear (Esc)"><span data-icon="x"></span></button>
+        <kbd>⌘F</kbd>
+      </div>
+      <form id="quick-add" class="side-input" autocomplete="off">
         <span class="qa-icon" data-icon="plus"></span>
         <input id="quick-add-input" placeholder="Add a to-do" spellcheck="false">
         <kbd>⌘K</kbd>
       </form>
       <div id="sidebar-scroll">
+        <div id="search-empty" class="empty" hidden></div>
         <section data-section="todos">
           <header draggable="true"><button type="button" class="sec-toggle" data-sec-toggle title="Click to collapse · drag to reorder">To-dos</button><span class="count" id="todo-count"></span></header>
           <ul class="list" id="todo-list"></ul>

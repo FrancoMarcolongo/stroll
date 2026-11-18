@@ -48,6 +48,7 @@ After an update, Stroll shows what changed, once. **Settings › Updates › Wha
 | --- | --- | --- |
 | ⌘K | Ctrl+Shift+K | Add a to-do |
 | ⌘N | Ctrl+Shift+N | New session |
+| ⌘F | Ctrl+Shift+F | Search everything in the sidebar |
 | ⌘J | Ctrl+Shift+J | Jump to the next thing that needs you |
 | ⌘0 | Ctrl+Shift+0 | Overview |
 | ⌘1–9 | Ctrl+Shift+1–9 | Jump to a live session |
@@ -68,6 +69,7 @@ On Linux, plain Ctrl keys (Ctrl+K, Ctrl+J, Ctrl+R, Ctrl+V…) go to Claude Code,
   - A trail can **Hand off** a background run, which gets the notes too. **Archive** it when the work is done; archived trails fold under **Archived**.
 - **Sessions in your home folder** answer Claude Code's "trust this folder" prompt for you. Claude Code never remembers trust for the home folder, so it would ask every time, resumes included. Other folders ask once, as usual.
 - **Sidebar sections** collapse when you click their title and move when you drag it, and closed sessions fold under their own **Closed** title. All of it is remembered. A collapsed section shows a yellow dot when something inside needs you.
+- **Search** (⌘F) filters every sidebar section as you type: to-dos (notes too), trails (notes too), sessions, runs, workflows and Elsewhere. Collapsed sections and the Closed and Archived lists open, limits like "last 8 closed" lift, and a match in hidden text shows as a snippet. ↑↓ and Enter open a match; Esc clears.
 - **Right-click a session** to mark it read or unread, or to mute its notifications.
 - **Drag files or screenshots** onto a session to paste their paths, as in iTerm. Claude Code picks up image paths.
 - **Links Claude prints are clickable.** Web links open in the browser. File links open in Zed at the right line when `zed` is on your PATH. Otherwise macOS opens the file in your text editor, and folders (and anything on Linux) are shown in Finder or the file manager. A file is never run.
