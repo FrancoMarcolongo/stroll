@@ -445,3 +445,10 @@ section.drop-after { box-shadow: inset 0 -2px 0 var(--accent); }
 .mde-peek pre { margin: 0; padding: 7px 10px; font: 11px/1.5 var(--mono); color: var(--text-2); white-space: pre; overflow: hidden; flex: 1; }
 .mde-foot { display: flex; justify-content: space-between; align-items: center; padding: 5px 10px; border-top: 1px solid var(--line-soft); color: var(--text-3); font-size: 11px; }
 .mde-foot .link-btn { text-transform: none; letter-spacing: 0; font-size: 11.5px; }
+
+/* to-do view: first message and its schedule */
+.todo-first h3 { display: flex; align-items: center; gap: 7px; }
+.todo-first h3 svg { width: 14px; height: 14px; color: var(--accent); }
+.todo-first .field select { max-width: 520px; }
+.todo-first .approval { margin: 0; }
+.reminder.starts { color: var(--accent); }

@@ -89,6 +89,8 @@ class Store extends EventEmitter {
       createdAt: now(), doneAt: null, remindAt, remindedAt: null, remindAck: false, cwd,
       trailId: this.trail(trail) ? trail : null,
       sessionIds: [], runIds: [],
+      // The first message, and when to send it on its own (see setTodoStart).
+      firstMessage: '', startAt: null, startMode: 'session', startAllowAll: false, startMissed: null, startError: null,
     };
     this.state.todos.push(t);
     if (sessionId) this.linkSession(sessionId, t.id, false);
@@ -104,6 +106,18 @@ class Store extends EventEmitter {
     if ('trailId' in patch && !this.trail(t.trailId)) t.trailId = null;
     if ('remindAt' in patch) { t.remindedAt = null; t.remindAck = false; }
     if ('status' in patch) t.doneAt = patch.status === 'done' ? now() : null;
+    if (patch.status === 'done') { t.startAt = null; t.startMissed = null; t.startError = null; }
+    this.changed();
+    return t;
+  }
+
+  // A to-do's first message and scheduled start. Kept apart from updateTodo, which the local
+  // API (and so any Claude session) can call: only Stroll's own window may schedule a start.
+  setTodoStart(id, patch) {
+    const t = this.todo(id);
+    if (!t) return null;
+    for (const k of ['firstMessage', 'startAt', 'startMode', 'startAllowAll', 'startMissed', 'startError']) if (k in patch) t[k] = patch[k];
+    if (patch.startAt) { t.startMissed = null; t.startError = null; }
     this.changed();
     return t;
   }
