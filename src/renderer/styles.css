@@ -56,12 +56,17 @@ kbd { font: 500 10.5px/1 var(--font); color: var(--text-3); background: var(--bg
 .nav-count { margin-left: auto; font-size: 11px; font-weight: 600; color: #1b1309; background: var(--amber); border-radius: 9px; padding: 0 7px; line-height: 18px; }
 .nav-count:empty { display: none; }
 
-#quick-add { margin: 2px 12px 10px; display: flex; align-items: center; gap: 7px; background: var(--bg-input); border: 1px solid var(--line); border-radius: var(--radius); padding: 0 8px 0 9px; transition: border-color 0.12s, box-shadow 0.12s; }
-#quick-add:focus-within { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
-#quick-add .qa-icon { color: var(--text-3); display: grid; }
-#quick-add:focus-within .qa-icon { color: var(--accent); }
-#quick-add-input { flex: 1; min-width: 0; background: transparent; border: 0; padding: 8px 0; outline: none; }
-#quick-add-input::placeholder { color: var(--text-3); }
+.side-input { margin: 2px 12px 10px; display: flex; align-items: center; gap: 7px; background: var(--bg-input); border: 1px solid var(--line); border-radius: var(--radius); padding: 0 8px 0 9px; transition: border-color 0.12s, box-shadow 0.12s; }
+.side-input:focus-within { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.side-input .qa-icon { color: var(--text-3); display: grid; }
+.side-input:focus-within .qa-icon { color: var(--accent); }
+.side-input input { flex: 1; min-width: 0; background: transparent; border: 0; padding: 8px 0; outline: none; }
+.side-input input::placeholder { color: var(--text-3); }
+#search { margin-bottom: 6px; }
+#search-clear { width: 20px; height: 20px; display: none; }
+#search-clear svg { width: 12px; height: 12px; }
+#search.has-query #search-clear { display: inline-grid; }
+#search.has-query kbd { display: none; }
 
 #sidebar-scroll { overflow-y: auto; flex: 1; padding-bottom: 24px; }
 section { padding: 4px 0 6px; }
@@ -371,3 +376,9 @@ section.drop-after { box-shadow: inset 0 -2px 0 var(--accent); }
 .wn-body p { margin: 0 0 6px; }
 .wn-body b { color: var(--text); font-weight: 600; }
 .wn-body code { font-family: var(--mono); font-size: 12px; background: var(--bg-raised); padding: 1px 5px; border-radius: 4px; }
+
+/* ---------- sidebar search ---------- */
+mark { background: rgba(217, 162, 107, 0.28); color: var(--text); border-radius: 3px; box-shadow: 0 0 0 1px rgba(217, 162, 107, 0.28); }
+.row .sub.snippet { color: var(--text-2); }
+.row.kbd { background: var(--bg-hover); box-shadow: inset 0 0 0 1px var(--accent); }
+#search-empty { padding: 10px 16px; }

@@ -27,6 +27,8 @@ const S = {
   recentLoaded: false,
   update: null,
   windowFocused: true,
+  query: '', // sidebar search
+  searchIdx: 0,
 };
 const terms = new Map(); // session id -> { term, fit, el, lastSeq, ready, queue }
 
@@ -100,6 +102,8 @@ const ICON = {
   note: svgIcon('<path d="M4 20h4L19 9l-4-4L4 16z"/><path d="M13.5 6.5l4 4"/>'),
   archive: svgIcon('<rect x="3" y="4" width="18" height="5" rx="1.5"/><path d="M5 9v9a2 2 0 002 2h10a2 2 0 002-2V9"/><path d="M10 13h4"/>'),
   sparkle: svgIcon('<path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9z"/><path d="M19 15l.8 2.2L22 18l-2.2.8L19 21l-.8-2.2L16 18l2.2-.8z"/>'),
+  search: svgIcon('<circle cx="11" cy="11" r="6.5"/><path d="M20 20l-4.2-4.2"/>'),
+  x: svgIcon('<path d="M18 6L6 18M6 6l12 12"/>'),
 };
 document.querySelectorAll('[data-icon]').forEach(el => { el.innerHTML = ICON[el.dataset.icon] || ''; });
 
@@ -144,6 +148,52 @@ function lightMarkdown(text) {
     .replace(/^(#{1,4}) (.*)$/gm, '<span class="h">$2</span>')
     .replace(/\*\*([^*\n]+)\*\*/g, '<b>$1</b>')
     .replace(/`([^`\n]+)`/g, '<code>$1</code>');
+}
+
+// ---------- sidebar search ----------
+// Every word of the query must appear somewhere in an item (title, preview, notes, prompt,
+// folder…). Matches are marked in what the row shows; a match only in hidden text (a to-do's
+// notes, a run's prompt) shows as a snippet under the title.
+const searchTerms = () => S.query.toLowerCase().split(/\s+/).filter(Boolean);
+const searching = () => searchTerms().length > 0;
+function matches(...fields) {
+  const terms = searchTerms();
+  if (!terms.length) return true;
+  const hay = fields.filter(Boolean).join('\n').toLowerCase();
+  return terms.every(t => hay.includes(t));
+}
+// Escaped text with the query's words in <mark>.
+function hl(text) {
+  const raw = String(text ?? '');
+  const terms = searchTerms();
+  if (!terms.length || !raw) return esc(raw);
+  const lower = raw.toLowerCase();
+  const marks = new Array(raw.length).fill(false);
+  for (const t of terms) for (let i = lower.indexOf(t); i >= 0; i = lower.indexOf(t, i + t.length)) marks.fill(true, i, i + t.length);
+  let out = '';
+  for (let i = 0; i < raw.length;) {
+    let j = i;
+    while (j < raw.length && marks[j] === marks[i]) j += 1;
+    out += marks[i] ? `<mark>${esc(raw.slice(i, j))}</mark>` : esc(raw.slice(i, j));
+    i = j;
+  }
+  return out;
+}
+// Where the query matches in text the row doesn't show, as a short highlighted line.
+function snippet(shown, ...hidden) {
+  const terms = searchTerms();
+  if (!terms.length) return '';
+  const visible = shown.filter(Boolean).join(' ').toLowerCase();
+  const missing = terms.filter(t => !visible.includes(t));
+  if (!missing.length) return '';
+  for (const field of hidden) {
+    const flat = String(field || '').replace(/\s+/g, ' ');
+    const i = flat.toLowerCase().indexOf(missing[0]);
+    if (i < 0) continue;
+    const start = Math.max(0, i - 24);
+    return `<div class="sub snippet">${start ? '…' : ''}${hl(flat.slice(start, i + 80))}</div>`;
+  }
+  return '';
 }
 
 // ---------- in-place list updates ----------
@@ -197,70 +247,108 @@ function needsYou(d) {
 }
 
 // ---------- sidebar ----------
+const todoMatches = t => matches(t.title, t.notes, t.cwd);
+const sessionMatches = s => matches(s.title, s.preview, s.cwd, s.firstMessage);
+const runMatches = r => matches(r.title, r.prompt, r.lastActivity, r.result, r.cwd);
+const workflowMatches = w => matches(w.name, w.template, w.prepareTemplate, w.cwd);
+const trailMatches = tr => matches(tr.title, tr.notes, tr.cwd);
+const recentMatches = r => matches(r.title, r.cwd);
+
 function renderSidebar() {
   const d = S.data;
-  const open = d.todos.filter(t => t.status === 'open').sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
-  const done = d.todos.filter(t => t.status === 'done').sort((a, b) => (b.doneAt || '').localeCompare(a.doneAt || ''));
+  const q = searching();
+  const open = d.todos.filter(t => t.status === 'open' && todoMatches(t)).sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+  const done = d.todos.filter(t => t.status === 'done' && todoMatches(t)).sort((a, b) => (b.doneAt || '').localeCompare(a.doneAt || ''));
   const n = needsYou(d);
   $('#nav-needs').textContent = (n.waiting.length + n.yourTurn.length + n.runs.length + n.reminders.length + n.workflows.length) || '';
   $('#home-btn').classList.toggle('active', S.view.type === 'home');
   $('#settings-btn').classList.toggle('active', S.view.type === 'settings');
   $('#todo-count').textContent = open.length || '';
   $('#done-count').textContent = done.length || '';
-  patchList($('#todo-list'), open.length ? open.map(todoRow).join('') : '<li class="empty">Nothing open. Add one above.</li>');
-  patchList($('#done-list'), done.slice(0, 30).map(todoRow).join(''));
+  patchList($('#todo-list'), open.length ? open.map(todoRow).join('') : q ? '' : '<li class="empty">Nothing open. Add one above.</li>');
+  // While searching, every match shows: no "first 30", and Done opens if something matched.
+  patchList($('#done-list'), (q ? done : done.slice(0, 30)).map(todoRow).join(''));
+  const doneWrap = $('#done-wrap');
+  if (q) {
+    if (doneWrap.dataset.wasOpen == null) doneWrap.dataset.wasOpen = doneWrap.open ? '1' : '';
+    doneWrap.open = done.length > 0;
+    doneWrap.hidden = !done.length;
+  } else {
+    if (doneWrap.dataset.wasOpen != null) { doneWrap.open = doneWrap.dataset.wasOpen === '1'; delete doneWrap.dataset.wasOpen; }
+    doneWrap.hidden = false;
+  }
 
-  const live = liveSessions();
-  const closed = d.sessions.filter(s => !s.live).slice(0, 8);
+  const live = liveSessions().filter(sessionMatches);
+  const allClosed = d.sessions.filter(s => !s.live && sessionMatches(s));
+  const closed = q ? allClosed : allClosed.slice(0, 8);
   const restorable = d.sessions.filter(s => !s.live && s.restorable);
-  const restoreBar = restorable.length
+  const restoreBar = restorable.length && !q
     ? `<li class="restore">${restorable.length} session${restorable.length === 1 ? ' was' : 's were'} open when Stroll quit
         <span><button class="btn primary" data-act="restore-all">Resume all</button><button class="btn ghost" data-act="restore-dismiss">Dismiss</button></span></li>`
     : '';
   patchList($('#session-list'), restoreBar
-    + (live.length ? live.map(sessionRow).join('') : '<li class="empty">No live sessions.</li>')
-    + (closed.length ? closedRows(closed, d.sessions.filter(s => !s.live).length) : ''));
+    + (live.length ? live.map(sessionRow).join('') : q ? '' : '<li class="empty">No live sessions.</li>')
+    + (closed.length ? closedRows(closed, q ? allClosed.length : d.sessions.filter(s => !s.live).length) : ''));
 
-  const runs = d.runs.slice().sort((a, b) => (b.startedAt || '').localeCompare(a.startedAt || ''));
+  const runs = d.runs.filter(runMatches).sort((a, b) => (b.startedAt || '').localeCompare(a.startedAt || ''));
   const activeRuns = runs.filter(r => r.status !== 'reviewed');
   $('#run-count').textContent = activeRuns.length || '';
   const finished = runs.filter(r => r.status !== 'running' && !r.unseen).length;
+  const reviewed = runs.filter(r => r.status === 'reviewed');
   patchList($('#run-list'), runs.length
-    ? [...activeRuns, ...runs.filter(r => r.status === 'reviewed').slice(0, 5)].map(runRow).join('')
-      + (finished ? `<li class="divider">${finished} finished<button class="link-btn" data-act="clear-runs">Clear</button></li>` : '')
-    : '<li class="empty">Hand off a to-do to run it here.</li>');
+    ? [...activeRuns, ...(q ? reviewed : reviewed.slice(0, 5))].map(runRow).join('')
+      + (finished && !q ? `<li class="divider">${finished} finished<button class="link-btn" data-act="clear-runs">Clear</button></li>` : '')
+    : q ? '' : '<li class="empty">Hand off a to-do to run it here.</li>');
 
-  patchList($('#workflow-list'), (d.workflows || []).map(workflowRow).join('')
-    || '<li class="empty">Add one with +, or right-click a session and save it as a workflow.</li>');
+  const workflows = (d.workflows || []).filter(workflowMatches);
+  patchList($('#workflow-list'), workflows.map(workflowRow).join('')
+    || (q ? '' : '<li class="empty">Add one with +, or right-click a session and save it as a workflow.</li>'));
 
-  const trails = activeTrails();
-  const archived = (d.trails || []).filter(t => t.status === 'archived').sort(byOrder);
-  patchList($('#trail-list'), (trails.length ? trails.map(trailRow).join('') : '<li class="empty">Add one with + to give related sessions shared notes.</li>')
+  const activeAll = activeTrails();
+  const trails = activeAll.filter(trailMatches);
+  const archived = (d.trails || []).filter(t => t.status === 'archived' && trailMatches(t)).sort(byOrder);
+  patchList($('#trail-list'), (trails.length ? trails.map(trailRow).join('') : q ? '' : '<li class="empty">Add one with + to give related sessions shared notes.</li>')
     + (archived.length ? archivedTrailRows(archived) : ''));
 
-  patchList($('#recent-list'), S.recent.length ? S.recent.map(recentRow).join('') : `<li class="empty">${S.recentLoaded ? 'Nothing recent.' : 'Loading…'}</li>`);
+  const recent = S.recent.filter(recentMatches);
+  patchList($('#recent-list'), recent.length ? recent.map(recentRow).join('') : q ? '' : `<li class="empty">${S.recentLoaded ? 'Nothing recent.' : 'Loading…'}</li>`);
 
   const attention = {
     todos: n.reminders.length, sessions: n.waiting.length + n.yourTurn.length, runs: n.runs.length, workflows: n.workflows.length,
-    trails: trails.filter(t => ['waiting', 'idle'].includes(trailDot(t))).length,
+    trails: activeAll.filter(t => ['waiting', 'idle'].includes(trailDot(t))).length,
   };
   for (const [key, count] of Object.entries(attention)) document.querySelector(`section[data-section="${key}"]`)?.toggleAttribute('data-alert', count > 0);
+
+  // Searching hides sections without a match, and says so when nothing matched at all.
+  const hits = {
+    todos: open.length + done.length, trails: trails.length + archived.length, sessions: live.length + closed.length,
+    runs: runs.length, workflows: workflows.length, recent: recent.length,
+  };
+  for (const [key, count] of Object.entries(hits)) document.querySelector(`section[data-section="${key}"]`).hidden = q && !count;
+  const total = Object.values(hits).reduce((a, b) => a + b, 0);
+  const none = $('#search-empty');
+  none.hidden = !q || total > 0;
+  if (q && !total) none.textContent = `Nothing matches “${S.query.trim()}”.`;
+  $('#search-count').textContent = q ? String(total) : '';
+  markSearchCursor();
 
   $('#multi-bar').hidden = S.selected.size === 0;
   $('#multi-count').textContent = `${S.selected.size} to-do${S.selected.size === 1 ? '' : 's'} selected`;
 }
 
-// Closed sessions fold under their own title (remembered with the sidebar sections).
+// Closed sessions fold under their own title (remembered with the sidebar sections). A search
+// opens it and hides Clear, which would clear more than the matches.
 function closedRows(closed, total) {
-  const open = !sidebarPrefs().collapsed.has('closed');
+  const q = searching();
+  const open = q || !sidebarPrefs().collapsed.has('closed');
   return `<li class="divider sub-toggle ${open ? 'open' : ''}" data-sub-toggle="closed" title="Click to ${open ? 'collapse' : 'expand'}">`
-    + `<span class="sub-title">Closed <span class="count">${total}</span></span><button class="link-btn" data-act="clear-closed">Clear</button></li>`
+    + `<span class="sub-title">Closed <span class="count">${total}</span></span>${q ? '' : '<button class="link-btn" data-act="clear-closed">Clear</button>'}</li>`
     + (open ? closed.map(sessionRow).join('') : '');
 }
 
 // Archived trails fold under their own title, closed until opened (remembered with the sections).
 function archivedTrailRows(archived) {
-  const open = sidebarPrefs().expanded.has('trails-archived');
+  const open = searching() || sidebarPrefs().expanded.has('trails-archived');
   return `<li class="divider sub-toggle ${open ? 'open' : ''}" data-sub-toggle="trails-archived" data-sub-default="closed" title="Click to ${open ? 'collapse' : 'expand'}">`
     + `<span class="sub-title">Archived <span class="count">${archived.length}</span></span></li>`
     + (open ? archived.map(trailRow).join('') : '');
@@ -303,8 +391,8 @@ function trailRow(tr) {
   const badge = n ? `<span class="sugg-badge" title="${plural(n, 'suggestion')} for the notes">${ICON.note}${n}</span>` : '';
   return `<li class="row ${isActive ? 'active' : ''} ${tr.status === 'archived' ? 'dim' : ''}" data-kind="trail" data-id="${esc(tr.id)}" title="${esc(shortDir(tr.cwd || ''))}">
     ${dotHtml(trailDot(tr))}
-    <div class="main"><div class="title-line"><span class="title">${esc(tr.title)}</span>${badge}</div>
-    <div class="sub">${esc(trailSub(tr))}</div></div>
+    <div class="main"><div class="title-line"><span class="title">${hl(tr.title)}</span>${badge}</div>
+    ${snippet([tr.title], tr.notes, tr.cwd) || `<div class="sub">${esc(trailSub(tr))}</div>`}</div>
     <span class="row-actions"><button class="icon-btn" data-act="trail-start" title="New session on this trail">${ICON.play}</button></span>
   </li>`;
 }
@@ -363,7 +451,7 @@ function todoRow(t) {
     ? `<span class="reminder" title="Reminder ${esc(new Date(t.remindAt).toLocaleString())}">${ICON.clock}</span>` : '';
   return `<li class="row ${isActive ? 'active' : ''} ${S.selected.has(t.id) ? 'selected' : ''}" data-kind="todo" data-id="${esc(t.id)}">
     <button class="check ${done ? 'done' : ''}" data-act="toggle" title="${done ? 'Reopen' : 'Mark done'}">${ICON.check}</button>
-    <div class="main"><div class="title">${esc(t.title)}</div></div>
+    <div class="main"><div class="title">${hl(t.title)}</div>${snippet([t.title], t.notes, t.cwd)}</div>
     <span class="meta">${pillHtml(todoState(t))}${reminder}</span>
     ${done ? '' : `<span class="row-actions">${work ? `<button class="icon-btn" data-act="goto-work" title="Go to its ${work.type === 'session' ? 'session' : 'background run'}">${workIcon(work)}</button>` : ''}<button class="icon-btn" data-act="start" title="${work ? 'Start another session' : 'Start a session'}">${ICON.play}</button><button class="icon-btn" data-act="handoff" title="Hand off to a background run">${ICON.handoff}</button></span>`}
   </li>`;
@@ -375,8 +463,8 @@ function sessionRow(s) {
   const preview = s.preview || (s.live ? SESSION_LABEL[st] || st : 'closed');
   return `<li class="row ${isActive ? 'active' : ''} ${s.live ? '' : 'dim'}" data-kind="session" data-id="${esc(s.id)}" title="${esc(shortDir(s.cwd))}">
     ${dotHtml(sessionDot(s))}
-    <div class="main"><div class="title-line"><span class="title">${esc(s.title || 'Untitled session')}</span>${bgBadge(s)}${s.muted ? `<span class="muted-icon" title="Notifications muted">${ICON.mute}</span>` : ''}<span class="when">${ago(s.lastActivityAt)}</span></div>
-    <div class="sub">${esc(preview)}</div></div>
+    <div class="main"><div class="title-line"><span class="title">${hl(s.title || 'Untitled session')}</span>${bgBadge(s)}${s.muted ? `<span class="muted-icon" title="Notifications muted">${ICON.mute}</span>` : ''}<span class="when">${ago(s.lastActivityAt)}</span></div>
+    ${snippet([s.title, preview], s.firstMessage, s.cwd) || `<div class="sub">${hl(preview)}</div>`}</div>
   </li>`;
 }
 
@@ -387,8 +475,8 @@ function runRow(r) {
       : `${RUN_LABEL[r.status] || r.status}${r.result ? ` · ${plainText(r.result).slice(0, 120)}` : ''}`;
   return `<li class="row ${isActive ? 'active' : ''} ${r.status === 'reviewed' ? 'dim' : ''}" data-kind="run" data-id="${esc(r.id)}">
     ${dotHtml(runDot(r))}
-    <div class="main"><div class="title-line"><span class="title">${esc(r.title)}</span><span class="when">${ago(r.finishedAt || r.startedAt)}</span></div>
-    <div class="sub">${esc(preview)}</div></div>
+    <div class="main"><div class="title-line"><span class="title">${hl(r.title)}</span><span class="when">${ago(r.finishedAt || r.startedAt)}</span></div>
+    ${snippet([r.title, preview], r.prompt, r.result, r.cwd) || `<div class="sub">${hl(preview)}</div>`}</div>
   </li>`;
 }
 
@@ -396,8 +484,8 @@ function recentRow(r) {
   const fresh = Date.now() - new Date(r.lastActivityAt).getTime() < 5 * 60 * 1000;
   return `<li class="row" data-kind="recent" data-id="${esc(r.id)}" title="${esc(r.title)}">
     ${dotHtml('none')}
-    <div class="main"><div class="title">${esc(r.title)}</div>
-    <div class="sub">${fresh ? 'active elsewhere · ' : ''}${esc(shortDir(r.cwd))} · ${ago(r.lastActivityAt)}</div></div>
+    <div class="main"><div class="title">${hl(r.title)}</div>
+    <div class="sub">${fresh ? 'active elsewhere · ' : ''}${hl(shortDir(r.cwd))} · ${ago(r.lastActivityAt)}</div></div>
   </li>`;
 }
 
@@ -1509,6 +1597,46 @@ $('#new-workflow-btn').addEventListener('click', async () => {
   navigate({ type: 'workflow', id: w.id });
   setTimeout(() => $('#wf-name')?.select(), 100);
 });
+// ---------- sidebar search: filters every section as you type ----------
+// ↑↓ move through the matches, Enter opens one (as a click would), Esc clears.
+const searchRows = () => [...$('#sidebar-scroll').querySelectorAll('section:not([hidden]) .row[data-kind]')].filter(el => el.offsetParent);
+function markSearchCursor() {
+  const rows = searchRows();
+  for (const el of $('#sidebar-scroll').querySelectorAll('.row.kbd')) el.classList.remove('kbd');
+  if (!searching() || !rows.length) return;
+  S.searchIdx = Math.max(0, Math.min(S.searchIdx, rows.length - 1));
+  rows[S.searchIdx].classList.add('kbd');
+}
+function setQuery(q) {
+  S.query = q;
+  S.searchIdx = 0;
+  $('#search').classList.toggle('has-query', !!q);
+  if (searching() && !S.recentLoaded) refreshRecent();
+  applySidebarLayout();
+  renderSidebar();
+  if (S.view.type === 'home') renderMain();
+}
+const searchInput = $('#search-input');
+searchInput.addEventListener('input', () => setQuery(searchInput.value));
+searchInput.addEventListener('keydown', e => {
+  if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+    e.preventDefault();
+    S.searchIdx += e.key === 'ArrowDown' ? 1 : -1;
+    markSearchCursor();
+    $('#sidebar-scroll .row.kbd')?.scrollIntoView({ block: 'nearest' });
+  } else if (e.key === 'Enter') {
+    e.preventDefault();
+    const row = $('#sidebar-scroll .row.kbd') || searchRows()[0];
+    if (row) row.querySelector('.main')?.click();
+  } else if (e.key === 'Escape') {
+    e.stopPropagation();
+    if (searchInput.value) { searchInput.value = ''; setQuery(''); return; }
+    searchInput.blur();
+    if (S.view.type === 'session') terms.get(S.view.id)?.term.focus();
+  }
+});
+$('#search-clear').addEventListener('click', () => { searchInput.value = ''; setQuery(''); searchInput.focus(); });
+
 // ---------- sidebar sections: collapse (click the header) and reorder (drag it), kept in config
 const SECTION_KEYS = ['todos', 'trails', 'sessions', 'runs', 'workflows', 'recent'];
 const SECTION_MIME = 'application/x-stroll-section';
@@ -1531,7 +1659,8 @@ function applySidebarLayout() {
   const { order, collapsed } = sidebarPrefs();
   const box = $('#sidebar-scroll');
   for (const k of order) box.appendChild(box.querySelector(`section[data-section="${k}"]`));
-  for (const sec of box.querySelectorAll('section[data-section]')) sec.classList.toggle('collapsed', collapsed.has(sec.dataset.section));
+  // A search shows its matches in collapsed sections too.
+  for (const sec of box.querySelectorAll('section[data-section]')) sec.classList.toggle('collapsed', !searching() && collapsed.has(sec.dataset.section));
 }
 
 function saveSidebar(patch) {
@@ -1543,7 +1672,7 @@ function saveSidebar(patch) {
 const sidebarBox = $('#sidebar-scroll');
 sidebarBox.addEventListener('click', e => {
   const sub = e.target.closest('[data-sub-toggle]');
-  if (sub && !e.target.closest('button')) {
+  if (sub && !e.target.closest('button') && !searching()) {
     const key = sub.dataset.subToggle;
     const field = sub.dataset.subDefault === 'closed' ? 'expanded' : 'collapsed';
     const set = sidebarPrefs()[field];
@@ -1553,7 +1682,7 @@ sidebarBox.addEventListener('click', e => {
     return;
   }
   const header = e.target.closest('section[data-section] > header');
-  if (!header || e.target.closest('button:not([data-sec-toggle])')) return;
+  if (!header || e.target.closest('button:not([data-sec-toggle])') || searching()) return;
   const key = header.parentElement.dataset.section;
   const { collapsed } = sidebarPrefs();
   if (collapsed.has(key)) collapsed.delete(key); else collapsed.add(key);
@@ -1634,10 +1763,11 @@ window.addEventListener('keydown', e => {
   }
 }, true);
 
-const LINUX_SHORTCUTS = { KeyN: 'new-session', KeyK: 'quick-add', Digit0: 'home', KeyJ: 'next-needs', Comma: 'settings' };
+const LINUX_SHORTCUTS = { KeyN: 'new-session', KeyK: 'quick-add', KeyF: 'search', Digit0: 'home', KeyJ: 'next-needs', Comma: 'settings' };
 
 function runCommand(cmd) {
   if (cmd === 'quick-add') { $('#quick-add-input').focus(); $('#quick-add-input').select(); }
+  if (cmd === 'search') { $('#search-input').focus(); $('#search-input').select(); }
   if (cmd === 'new-session') startModal([]);
   if (cmd === 'home') navigate({ type: 'home' });
   if (cmd === 'settings') navigate({ type: 'settings' });
@@ -1779,7 +1909,7 @@ function workflowRow(w) {
   const isActive = S.view.type === 'workflow' && S.view.id === w.id;
   return `<li class="row ${isActive ? 'active' : ''}" data-kind="workflow" data-id="${esc(w.id)}">
     ${dotHtml(workflowDot(w))}
-    <div class="main"><div class="title">${esc(w.name)}</div><div class="sub">${esc(workflowStatus(w))}</div></div>
+    <div class="main"><div class="title">${hl(w.name)}</div>${snippet([w.name], w.template, w.prepareTemplate, w.cwd) || `<div class="sub">${esc(workflowStatus(w))}</div>`}</div>
     <span class="row-actions"><button class="icon-btn" data-act="wf-start" title="Start">${ICON.play}</button></span>
   </li>`;
 }

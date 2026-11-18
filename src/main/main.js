@@ -393,6 +393,7 @@ function buildMenu() {
       submenu: [
         { label: 'New Session', ...appKey('N'), click: () => send('ui:command', 'new-session') },
         { label: 'Add To-do', ...appKey('K'), click: () => send('ui:command', 'quick-add') },
+        { label: 'Search', ...appKey('F'), click: () => send('ui:command', 'search') },
         { label: 'Overview', ...appKey('0'), click: () => send('ui:command', 'home') },
         { label: 'Next Needing You', ...appKey('J'), click: () => send('ui:command', 'next-needs') },
         { type: 'separator' },
