@@ -28,7 +28,7 @@ cd ~/stroll
 stroll
 ```
 
-`install.sh` checks those prerequisites, installs dependencies (it compiles the terminal module for Electron, about a minute) and links `stroll` into `~/.local/bin`.
+`install.sh` checks those prerequisites, installs dependencies (it compiles the terminal module for Electron, about a minute) and links `stroll` into `~/.local/bin`. On Linux it also adds Stroll to your app menu, with its icon.
 
 Stroll runs from this checkout on purpose: an unsigned packaged `.app` would be blocked by macOS Gatekeeper.
 
