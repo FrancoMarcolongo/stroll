@@ -2,6 +2,15 @@
 
 Stroll shows the new sections here once, after an update. **Settings › Updates › What's new** shows them all again.
 
+## 0.11.0 — 2026-11-18
+
+### Search the sidebar
+- **⌘F (Ctrl+Shift+F on Linux) searches everything in the sidebar:** to-dos, trails, sessions, background runs, workflows and sessions started elsewhere. It looks in titles and in what's behind them (notes, prompts, previews, folders), and shows where it matched.
+- **↑ and ↓ move through the matches, Enter opens one, Esc clears.** Collapsed sections, Done, Closed and Archived open while you search and go back as they were after.
+
+### Linux
+- `install.sh` adds Stroll to the app menu, with its icon. If you installed before this, run `./install.sh` once more to get it.
+
 ## 0.10.0 — 2026-11-18
 
 ### Stroll on your phone
