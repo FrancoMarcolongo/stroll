@@ -8,6 +8,7 @@ const { childEnv } = require('./config');
 const { summarizeInput } = require('./runs');
 const { transcriptFor } = require('./recent');
 const { BackgroundTracker, endedIds } = require('./background');
+const { refsNote } = require('./files');
 
 const BUFFER_LIMIT = 2 * 1024 * 1024; // chars of scrollback kept for replay when a view (re)attaches
 const TRANSCRIPT_TAIL = 512 * 1024;
@@ -110,12 +111,16 @@ function todoContext(todos) {
 
 // Appended to the system prompt when the session starts (and again on every resume, so a
 // resumed session gets the notes as they are now).
-function sessionContext(trail, todos) {
+// Files the trail's or to-dos' notes reference with @ are listed by absolute path, so Claude can
+// read them: Claude Code doesn't expand "@" in a system prompt.
+function sessionContext(trail, todos, dir) {
   if (!trail && !todos.length) return null;
+  const refs = refsNote([trail?.notes, ...todos.map(t => t.notes)].join('\n'), dir);
   return [
     "This session was started from Stroll, the user's session manager.",
     trail ? trailContext(trail) : null,
     todos.length ? todoContext(todos) : null,
+    refs || null,
   ].filter(Boolean).join('\n\n');
 }
 
@@ -168,7 +173,7 @@ class Sessions extends EventEmitter {
     const args = ['--mcp-config', this.paths.mcpConfig, '--settings', this.paths.hookSettings];
     args.push(...(resumable ? ['--resume', resumable] : ['--session-id', id]));
     if (!resumable && (title || existing?.title)) args.push('--name', title || existing.title);
-    const context = sessionContext(trail, todos);
+    const context = sessionContext(trail, todos, dir);
     if (context) args.push('--append-system-prompt', context);
     if (firstMessage && firstMessage.trim()) args.push('--', firstMessage.trim());
 

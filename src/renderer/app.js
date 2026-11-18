@@ -498,6 +498,7 @@ api.on('session:exit', id => { if (S.view.type === 'session' && S.view.id === id
 
 // ---------- main views ----------
 function navigate(view) {
+  MdEditor.close();
   S.view = view;
   api.send('ui:focus', view);
   renderSidebar();
@@ -628,7 +629,7 @@ async function renderRun(header, panel) {
   `;
   updateRunMeta();
   panel.innerHTML = `<div class="run-view">
-    <details class="run-prompt-wrap"><summary>Prompt</summary><div class="run-prompt">${esc(r.prompt)}</div></details>
+    <details class="run-prompt-wrap"><summary>Prompt</summary><div class="run-prompt md-view">${MdEditor.render(r.prompt)}</div></details>
     <div id="run-approval"></div>
     <div class="events" id="run-events"></div>
     <div id="run-result"></div>
@@ -725,7 +726,8 @@ function renderTodo(header, panel) {
   `;
   panel.innerHTML = `<div class="todo-view">
     <div class="field"><label>Title</label><input type="text" id="todo-title" value="${esc(t.title)}"></div>
-    <div class="field"><label>Notes</label><textarea id="todo-notes" placeholder="Context, links, what done looks like…">${esc(t.notes)}</textarea></div>
+    <div class="field"><label>Notes</label><textarea id="todo-notes" placeholder="Context, links, what done looks like… Type @ to reference a file.">${esc(t.notes)}</textarea>
+      <p class="help">Claude gets these with the to-do. Files referenced with <code>@</code> are listed for it to read.</p></div>
     <div class="field"><label>Reminder</label><div class="inline"><input type="datetime-local" id="todo-remind" value="${toLocalInput(t.remindAt)}">
       <button class="btn" data-remind="60">In 1h</button><button class="btn" data-remind="tomorrow">Tomorrow 9:00</button><button class="btn ghost" data-remind="clear">Clear</button></div></div>
     <div class="field"><label>Working directory</label><div class="inline"><input type="text" id="todo-cwd" value="${esc(t.cwd || '')}" placeholder="${esc(trail(t.trailId)?.cwd || S.data.config.defaultCwd)}"><button class="btn" data-act="pick-todo-cwd">Browse…</button></div></div>
@@ -733,12 +735,14 @@ function renderTodo(header, panel) {
       <p class="help">Sessions and hand-offs started from this to-do get the trail’s notes too.</p></div>
     <div class="field links" id="todo-links"></div>
   </div>`;
-  renderTodoLinks();
 
   const save = patch => api.invoke('todo:update', t.id, patch);
+  const cwd = () => $('#todo-cwd')?.value.trim() || trail(todo(t.id)?.trailId)?.cwd || S.data.config.defaultCwd;
+  const notesEd = MdEditor.attach($('#todo-notes'), { cwd, rows: 6 });
+  renderTodoLinks();
   $('#todo-title').addEventListener('change', e => { const v = e.target.value.trim(); if (v) save({ title: v }); });
   $('#todo-notes').addEventListener('change', e => save({ notes: e.target.value }));
-  $('#todo-cwd').addEventListener('change', e => save({ cwd: e.target.value.trim() || null }));
+  $('#todo-cwd').addEventListener('change', e => { save({ cwd: e.target.value.trim() || null }); notesEd.refresh(); });
   $('#todo-remind').addEventListener('change', e => save({ remindAt: e.target.value ? new Date(e.target.value).toISOString() : null }));
   $('#todo-trail').addEventListener('change', async e => {
     if (e.target.value !== '__new') return save({ trailId: e.target.value || null });
@@ -804,7 +808,7 @@ function renderTrail(header, panel) {
   panel.innerHTML = `<div class="todo-view trail-view">
     <div id="trail-suggestions"></div>
     <div class="field"><label>Notes <span class="hint">shared context: every session on this trail starts with them</span></label>
-      <textarea id="trail-notes" spellcheck="false" placeholder="What every session on this trail should know: the goal, the repos and folders, the ticket or epic, decisions made and why, gotchas, who owns what.">${esc(tr.notes)}</textarea>
+      <textarea id="trail-notes" spellcheck="false" placeholder="What every session on this trail should know: the goal, the repos and folders, the ticket or epic, decisions made and why, gotchas, who owns what. Type @ to reference a file.">${esc(tr.notes)}</textarea>
       <p class="help" id="trail-notes-help"></p></div>
     <div class="field"><label>Title</label><input type="text" id="trail-title" value="${esc(tr.title)}"></div>
     <div class="field"><label>Working directory</label><div class="inline"><input type="text" id="trail-cwd" value="${esc(tr.cwd || '')}" placeholder="${esc(S.data.config.defaultCwd)}"><button class="btn" data-act="pick-trail-cwd">Browse…</button></div>
@@ -817,6 +821,7 @@ function renderTrail(header, panel) {
 
   const notes = $('#trail-notes');
   notes.dataset.base = tr.notes;
+  const notesEd = MdEditor.attach(notes, { cwd: () => $('#trail-cwd')?.value.trim() || S.data.config.defaultCwd, rows: 8 });
   const notesHelp = () => {
     const n = wordCount(notes.value);
     $('#trail-notes-help').innerHTML = `${n ? `${n.toLocaleString()} word${n === 1 ? '' : 's'}. ` : ''}Sessions on this trail suggest additions as they learn things; you accept them above. Ask Claude to “add this to the trail” to write one right away.`
@@ -830,13 +835,13 @@ function renderTrail(header, panel) {
     let value = notes.value;
     if (cur !== base && cur.startsWith(base)) value = `${value.replace(/\s+$/, '')}\n${cur.slice(base.length).replace(/^\s+/, '')}`;
     notes.dataset.base = value;
-    if (value !== notes.value) notes.value = value;
+    if (value !== notes.value) { notes.value = value; notesEd.refresh(); }
     api.invoke('trail:update', tr.id, { notes: value });
   });
   notesHelp();
   const save = patch => api.invoke('trail:update', tr.id, patch);
   $('#trail-title').addEventListener('change', e => { const v = e.target.value.trim(); if (v) save({ title: v }); });
-  $('#trail-cwd').addEventListener('change', e => save({ cwd: e.target.value.trim() || null }));
+  $('#trail-cwd').addEventListener('change', e => { save({ cwd: e.target.value.trim() || null }); notesEd.refresh(); });
   $('#trail-add-todo').addEventListener('submit', async e => {
     e.preventDefault();
     const input = e.target.querySelector('input');
@@ -947,7 +952,7 @@ function greeting() {
 function modal(html, onMount) {
   const root = $('#modal-root');
   root.innerHTML = `<div class="backdrop"><div class="modal">${html}</div></div>`;
-  const close = () => { root.innerHTML = ''; if (S.view.type === 'session') terms.get(S.view.id)?.term.focus(); };
+  const close = () => { MdEditor.close(); root.innerHTML = ''; if (S.view.type === 'session') terms.get(S.view.id)?.term.focus(); };
   root.querySelector('.backdrop').addEventListener('mousedown', e => { if (e.target.classList.contains('backdrop')) close(); });
   onMount(root.querySelector('.modal'), close);
 }
@@ -961,10 +966,11 @@ function dirField(initial) {
 
 function wireDirField(m) {
   const input = m.querySelector('input[name=cwd]');
-  m.querySelectorAll('[data-dir]').forEach(c => c.addEventListener('click', () => { input.value = c.dataset.dir; }));
+  const set = v => { input.value = v; input.dispatchEvent(new Event('change')); };
+  m.querySelectorAll('[data-dir]').forEach(c => c.addEventListener('click', () => set(c.dataset.dir)));
   m.querySelector('[data-pick-dir]').addEventListener('click', async () => {
     const d = await api.invoke('dialog:pickDir', input.value);
-    if (d) input.value = d;
+    if (d) set(d);
   });
   return input;
 }
@@ -984,6 +990,7 @@ function wireTrailField(m, cwdInput, todos) {
     if (cwdInput.value !== autoCwd || todos.some(t => t.cwd)) return;
     autoCwd = trail(sel.value)?.cwd || S.data.recentDirs[0] || S.data.config.defaultCwd;
     cwdInput.value = autoCwd;
+    cwdInput.dispatchEvent(new Event('change'));
   });
   return () => sel.value || null;
 }
@@ -1000,11 +1007,13 @@ function startModal(todoIds = [], { trailId } = {}) {
     <div class="field"><label>Name</label><input type="text" name="title" value="${esc(title)}" placeholder="Optional"></div>
     ${trailField(selected)}
     ${dirField(cwd)}
-    <div class="field"><label>First message</label><textarea name="first" rows="3" placeholder="Optional. Leave empty to start typing in the session."></textarea></div>
+    <div class="field"><label>First message</label><textarea name="first" placeholder="Optional. Leave empty to start typing in the session. Type @ to reference a file."></textarea></div>
     <footer><button class="btn ghost" data-close>Cancel</button><button class="btn primary" data-go>${ICON.play}Start <kbd>${SUBMIT_KEY}</kbd></button></footer>
   `, (m, close) => {
     const cwdInput = wireDirField(m);
     const pickedTrail = wireTrailField(m, cwdInput, todos);
+    const firstEd = MdEditor.attach(m.querySelector('[name=first]'), { cwd: () => cwdInput.value.trim(), rows: 3 });
+    cwdInput.addEventListener('change', firstEd.refresh);
     const go = async () => {
       let id;
       try {
@@ -1036,12 +1045,14 @@ function handoffModal(todoIds, { trailId } = {}) {
   modal(`
     <h2>Hand off to a background run</h2>
     <div class="sub">${forTrail ? `For the trail “${esc(tr.title)}”; it gets the trail’s notes.` : `${todos.map(t => esc(t.title)).join(' · ')}${tr ? `<br>On the trail “${esc(tr.title)}”; it gets the trail’s notes too.` : ''}`}<br>It investigates and drafts, never edits, pushes or sends, and asks you before anything else. You'll get a notification when it's ready or needs you.</div>
-    <div class="field"><label>${forTrail ? 'What should it do?' : 'Instructions'}</label><textarea name="instructions" rows="5" placeholder="${forTrail ? 'What to investigate or draft.' : 'Optional. What should it look at, what should the draft be?'}"></textarea></div>
+    <div class="field"><label>${forTrail ? 'What should it do?' : 'Instructions'}</label><textarea name="instructions" placeholder="${forTrail ? 'What to investigate or draft.' : 'Optional. What should it look at, what should the draft be?'} Type @ to reference a file."></textarea></div>
     ${dirField(cwd)}
     ${toggle('handoff-allow-all', false, 'Allow everything it asks for', ALLOW_ALL_HELP)}
     <footer><button class="btn ghost" data-close>Cancel</button><button class="btn primary" data-go>${ICON.handoff}Hand off <kbd>${SUBMIT_KEY}</kbd></button></footer>
   `, (m, close) => {
     const cwdInput = wireDirField(m);
+    const instrEd = MdEditor.attach(m.querySelector('[name=instructions]'), { cwd: () => cwdInput.value.trim(), rows: 5 });
+    cwdInput.addEventListener('change', instrEd.refresh);
     const go = async () => {
       let id;
       try {
@@ -1256,7 +1267,7 @@ document.addEventListener('click', async e => {
       }
       case 'pick-todo-cwd': {
         const d = await api.invoke('dialog:pickDir', $('#todo-cwd').value);
-        if (d) { $('#todo-cwd').value = d; api.invoke('todo:update', S.view.id, { cwd: d }); }
+        if (d) { $('#todo-cwd').value = d; $('#todo-cwd').dispatchEvent(new Event('change')); }
         return undefined;
       }
       case 'link-todo': return linkTodoModal(S.view.id);
@@ -1284,7 +1295,7 @@ document.addEventListener('click', async e => {
       }
       case 'pick-trail-cwd': {
         const d = await api.invoke('dialog:pickDir', $('#trail-cwd').value);
-        if (d) { $('#trail-cwd').value = d; api.invoke('trail:update', S.view.id, { cwd: d }); }
+        if (d) { $('#trail-cwd').value = d; $('#trail-cwd').dispatchEvent(new Event('change')); }
         return undefined;
       }
       case 'sug-accept': case 'sug-dismiss': {
@@ -1358,7 +1369,7 @@ document.addEventListener('click', async e => {
       }
       case 'wf-pick-cwd': {
         const d = await api.invoke('dialog:pickDir', $('#wf-cwd').value);
-        if (d) { $('#wf-cwd').value = d; api.invoke('workflow:update', S.view.id, { cwd: d }); }
+        if (d) { $('#wf-cwd').value = d; $('#wf-cwd').dispatchEvent(new Event('change')); }
         return undefined;
       }
       case 'apply-update': return applyUpdate();
@@ -1805,9 +1816,9 @@ function renderWorkflow(header, panel) {
       <div class="field"><label>Runs as</label><select id="wf-mode">
         <option value="session" ${w.mode !== 'run' ? 'selected' : ''}>A session: you work through it with Claude</option>
         <option value="run" ${w.mode === 'run' ? 'selected' : ''}>A background run: it reports back when done</option></select></div>
-      <div class="field"><label>First message</label><textarea id="wf-template" rows="3" spellcheck="false" placeholder="/plugin:skill {{stories=every story In Development}}">${esc(w.template)}</textarea>
+      <div class="field"><label>First message</label><textarea id="wf-template" spellcheck="false" placeholder="/plugin:skill {{stories=every story In Development}}">${esc(w.template)}</textarea>
         <p class="help">What Stroll types for you; a skill works as in the terminal. Blanks become the start form: <code>{{name}}</code> a text field, <code>{{name=default}}</code> one with a default, <code>{{name?text}}</code> a switch that adds <code>text</code>.</p></div>
-      <div class="field"><label>Prep message (optional)</label><textarea id="wf-prepare" rows="2" spellcheck="false" placeholder="The read-only half, e.g. a diff-only or report-only variant. Same blanks.">${esc(w.prepareTemplate || '')}</textarea>
+      <div class="field"><label>Prep message (optional)</label><textarea id="wf-prepare" spellcheck="false" placeholder="The read-only half, e.g. a diff-only or report-only variant. Same blanks.">${esc(w.prepareTemplate || '')}</textarea>
         <p class="help">"Prepare now" and a scheduled prep run this in the background with your last values. When it's ready, continue it in a session to do the rest. Empty means the first message.</p></div>
       ${toggle('wf-allow-all', w.runAllowAll, 'Its background runs allow everything they ask for', ALLOW_ALL_HELP)}
     </section>
@@ -1824,8 +1835,10 @@ function renderWorkflow(header, panel) {
 
   const save = patch => api.invoke('workflow:update', w.id, patch);
   const on = (sel, ev, fn) => panel.querySelector(sel).addEventListener(ev, fn);
+  const cwd = () => $('#wf-cwd')?.value.trim() || S.data.config.defaultCwd;
+  const eds = [MdEditor.attach($('#wf-template'), { cwd, blanks: true, rows: 3 }), MdEditor.attach($('#wf-prepare'), { cwd, blanks: true, rows: 2 })];
   on('#wf-name', 'change', e => { const v = e.target.value.trim(); if (v) save({ name: v }); });
-  on('#wf-cwd', 'change', e => save({ cwd: e.target.value.trim() || null }));
+  on('#wf-cwd', 'change', e => { save({ cwd: e.target.value.trim() || null }); eds.forEach(ed => ed.refresh()); });
   on('#wf-mode', 'change', e => save({ mode: e.target.value }));
   on('#wf-template', 'change', e => save({ template: e.target.value.trim() }));
   on('#wf-prepare', 'change', e => save({ prepareTemplate: e.target.value.trim() }));
@@ -1903,7 +1916,7 @@ async function startWorkflowModal(id) {
     };
     const preview = async () => {
       const { text } = await api.invoke('workflow:render', w.template, read());
-      m.querySelector('#wf-preview').textContent = text || 'Empty. Add a first message under Setup.';
+      m.querySelector('#wf-preview').innerHTML = text ? MdEditor.render(text) : 'Empty. Add a first message under Setup.';
     };
     m.addEventListener('input', preview);
     m.addEventListener('change', preview);
