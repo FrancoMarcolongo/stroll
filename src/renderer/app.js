@@ -250,8 +250,9 @@ function needsYou(d) {
     runs: d.runs.filter(r => ['idle', 'waiting'].includes(runDot(r))),
     reminders: d.todos.filter(t => t.status === 'open' && t.remindAt && !t.remindAck && new Date(t.remindAt) <= new Date()),
     workflows: (d.workflows || []).filter(w => w.due && !w.due.runId),
-    // To-dos whose scheduled start was missed (Stroll closed) or failed.
-    starts: d.todos.filter(t => t.status === 'open' && (t.startMissed || t.startError)),
+    // To-dos whose scheduled start was missed (Stroll closed) or failed. One with a reminder
+    // due is already listed for that; it isn't listed, or counted, twice.
+    starts: d.todos.filter(t => t.status === 'open' && (t.startMissed || t.startError) && !(t.remindAt && !t.remindAck && new Date(t.remindAt) <= new Date())),
   };
 }
 
@@ -860,7 +861,11 @@ function renderTodo(header, panel) {
   </div>`;
 
   const save = patch => api.invoke('todo:update', t.id, patch);
-  const saveStart = patch => api.invoke('todo:setStart', t.id, patch).catch(flashError);
+  // A time that is refused (no working directory, already past) goes back to what is saved.
+  const saveStart = patch => api.invoke('todo:setStart', t.id, patch).catch(err => {
+    flashError(err);
+    if ('startAt' in patch && $('#todo-start-at')) $('#todo-start-at').value = toLocalInput(todo(t.id)?.startAt);
+  });
   const cwd = () => $('#todo-cwd')?.value.trim() || trail(todo(t.id)?.trailId)?.cwd || S.data.config.defaultCwd;
   const notesEd = MdEditor.attach($('#todo-notes'), { cwd, rows: 6 });
   const firstEd = $('#todo-first') && MdEditor.attach($('#todo-first'), { cwd, rows: 4 });
@@ -895,12 +900,16 @@ function renderTodoStart(t) {
   if (!help) return;
   const startInput = $('#todo-start-at');
   if (startInput && document.activeElement !== startInput && startInput.value !== toLocalInput(t.startAt)) startInput.value = toLocalInput(t.startAt);
+  const dir = t.cwd || trail(t.trailId)?.cwd;
+  const how = t.startMode === 'run'
+    ? 'The background run only reads and drafts, and asks you before anything else.'
+    : 'The session opens as if you had pressed Start, with your usual Claude Code permissions and nobody watching it.';
   help.textContent = t.startAt
-    ? `Starts ${slotText(t.startAt)}${t.firstMessage?.trim() ? '' : ', with no first message'}. It fires only while Stroll is open; a time missed while it was closed shows up as missed, it doesn't run late.`
-    : 'Pick a time to have Stroll start it for you, with the first message above.';
+    ? `Starts ${slotText(t.startAt)} in ${shortDir(dir) || 'its working directory'}${t.firstMessage?.trim() ? '' : ', with no first message'}. ${how} It fires only while Stroll is open and the computer awake: a missed time is reported, never run late. Starting it yourself first cancels it.`
+    : `Pick a time to have Stroll start it for you, with the first message above. ${dir ? how : 'It needs a working directory below first: a start on its own never guesses the folder.'}`;
   const box = $('#todo-start-due');
   const markup = !(t.startMissed || t.startError) ? '' : `<div class="approval">
-    <div class="ap-head">${ICON.bell}<b>${t.startError ? "It couldn't start" : 'Missed while Stroll was closed'}</b><span class="h-meta">set for ${esc(slotText(t.startMissed))}</span></div>
+    <div class="ap-head">${ICON.bell}<b>${t.startError ? "It couldn't start" : 'Missed while Stroll was closed or the computer asleep'}</b><span class="h-meta">set for ${esc(slotText(t.startMissed))}</span></div>
     ${t.startError ? `<p class="help">${esc(t.startError)}</p>` : ''}
     <div class="actions"><button class="btn primary" data-act="todo-start-now">${ICON.play}Start now</button><button class="btn ghost" data-act="todo-start-dismiss">Dismiss</button></div></div>`;
   if (box.dataset.markup !== markup) { box.innerHTML = markup; box.dataset.markup = markup; }
@@ -1687,8 +1696,12 @@ document.addEventListener('click', e => {
   if (kind === '60') at = new Date(Date.now() + 60 * 60 * 1000);
   if (kind === 'tomorrow') { at = new Date(); at.setDate(at.getDate() + 1); at.setHours(9, 0, 0, 0); }
   const first = $('#todo-first');
-  api.invoke('todo:setStart', S.view.id, { startAt: at ? at.toISOString() : null, ...(first ? { firstMessage: first.value } : {}) }).catch(flashError);
+  const id = S.view.id;
   $('#todo-start-at').value = at ? toLocalInput(at.toISOString()) : '';
+  api.invoke('todo:setStart', id, { startAt: at ? at.toISOString() : null, ...(first ? { firstMessage: first.value } : {}) }).catch(err => {
+    flashError(err);
+    if (S.view.type === 'todo' && S.view.id === id && $('#todo-start-at')) $('#todo-start-at').value = toLocalInput(todo(id)?.startAt);
+  });
 });
 
 // Right-click on a session or background run: mark it read (hide its dot) or unread (show it).

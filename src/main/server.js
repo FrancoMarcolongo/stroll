@@ -125,6 +125,7 @@ class Server {
       }
       if (req.method === 'PATCH') {
         const t = h.updateTodo(id, await body());
+        if (t?.error) return json(400, t);
         return t ? json(200, t) : json(404, { error: 'no such to-do' });
       }
     }

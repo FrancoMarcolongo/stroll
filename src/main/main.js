@@ -143,7 +143,7 @@ function startHandoff(todoIds, { instructions = '', prompt = null, cwd = null, t
   if (!todos.length && !prompt && !String(instructions).trim()) throw new Error('Say what the background run should do.');
   const dir = cwd || todos.find(t => t.cwd)?.cwd || trail?.cwd || store.state.recentDirs[0] || config.defaultCwd;
   const firstLine = String(instructions).trim().split('\n')[0].slice(0, 60);
-  return runs.start({
+  const runId = runs.start({
     prompt: prompt || handoffPrompt(todos, instructions, dir, trail),
     cwd: dir,
     title: title || (todos.length === 1 ? todos[0].title : todos.length ? `${todos.length} to-dos` : trail ? `${trail.title} · ${firstLine}` : null),
@@ -151,10 +151,52 @@ function startHandoff(todoIds, { instructions = '', prompt = null, cwd = null, t
     allowAll,
     trailId: trail?.id || null,
   });
+  clearTodoStarts(todoIds);
+  return runId;
 }
 
 // ---------- to-dos that start on their own ----------
+// Nobody is watching a session that a schedule opens, so three rules hold here:
+// - it starts in the folder the user chose, never a guessed one (todoStartDir);
+// - it starts once: started by hand first, the schedule is used up (clearTodoStarts);
+// - only Stroll's own window sets a schedule. The tools Claude sessions have and the phone
+//   can't, and a session can't move a scheduled to-do to another folder either (boot()).
 const START_MODES = ['session', 'run'];
+// Sessions a schedule opened, by session id, to report one that dies right away as not started.
+const scheduledStarts = new Map();
+
+// Where a to-do starts on its own: its folder, else its trail's, and it has to be there. Not
+// the last folder used, not home.
+function todoStartDir(t) {
+  const dir = t.cwd || store.trail(t.trailId)?.cwd || null;
+  if (!dir) throw new Error('Give this to-do a working directory first. A start on its own never guesses the folder.');
+  let there = false;
+  try { there = fs.statSync(dir).isDirectory(); } catch (_) { /* gone */ }
+  if (!there) throw new Error(`Its working directory is not there any more: ${dir}`);
+  return dir;
+}
+
+// A to-do started by hand (Start, Hand off, from the phone or a session) before its time
+// doesn't start again at that time.
+function clearTodoStarts(todoIds) {
+  for (const id of todoIds || []) if (store.todo(id)?.startAt) store.setTodoStart(id, { startAt: null });
+}
+
+// From the to-do view. The first message and the mode are saved whatever happens to the time;
+// a time is accepted only for an open to-do that has its folder, and only if still to come.
+function setTodoStart(id, patch) {
+  const t = store.todo(id);
+  if (!t) throw new Error('That to-do no longer exists.');
+  const { startAt, ...rest } = cleanTodoStart(patch);
+  if (Object.keys(rest).length) store.setTodoStart(id, rest);
+  if (startAt === undefined) return store.todo(id);
+  if (startAt) {
+    if (t.status !== 'open') throw new Error('That to-do is done.');
+    todoStartDir(t);
+    if (Date.parse(startAt) <= Date.now()) throw new Error('Pick a time that is still to come.');
+  }
+  return store.setTodoStart(id, { startAt });
+}
 
 // Only fields that make sense, from the to-do view.
 function cleanTodoStart(patch = {}) {
@@ -171,15 +213,19 @@ function cleanTodoStart(patch = {}) {
 }
 
 // Starts a to-do with its first message: a session, or a hand-off when it's set to run in
-// the background. Clears its schedule. Both take the to-do's trail, as Start and Hand off do.
+// the background. Both take the to-do's trail, as Start and Hand off do. Its schedule and any
+// missed start are cleared once it has started, so a start that fails keeps them.
 function startTodo(id) {
   const t = store.todo(id);
   if (!t) throw new Error('That to-do no longer exists.');
+  if (t.status !== 'open') throw new Error('That to-do is done.');
   const message = (t.firstMessage || '').trim();
-  const cwd = t.cwd || store.trail(t.trailId)?.cwd || store.state.recentDirs[0] || config.defaultCwd;
+  const cwd = todoStartDir(t);
+  const started = t.startMode === 'run'
+    ? { type: 'run', id: startHandoff([id], { instructions: message, cwd, allowAll: t.startAllowAll }) }
+    : { type: 'session', id: sessions.create({ cwd, title: t.title, todoIds: [id], firstMessage: message || null }) };
   store.setTodoStart(id, { startAt: null, startMissed: null, startError: null });
-  if (t.startMode === 'run') return { type: 'run', id: startHandoff([id], { instructions: message, cwd, allowAll: t.startAllowAll }) };
-  return { type: 'session', id: sessions.create({ cwd, title: t.title, todoIds: [id], firstMessage: message || null }) };
+  return started;
 }
 
 // Same rule as workflows: a start missed while Stroll was closed is reported, never run late.
@@ -193,11 +239,12 @@ function checkTodoStarts() {
     const view = { type: 'todo', id: t.id };
     if (nowMs - atMs > WORKFLOW_GRACE_MS) {
       store.setTodoStart(t.id, { startAt: null, startMissed: at });
-      notify(`Missed: ${t.title}`, `It was set to start ${slotLabel(at)}, while Stroll was closed.`, view);
+      notify(`Missed: ${t.title}`, `It was set to start ${slotLabel(at)}, while Stroll was closed or the computer asleep.`, view);
       continue;
     }
     try {
       const started = startTodo(t.id);
+      if (started.type === 'session') scheduledStarts.set(started.id, { todoId: t.id, at });
       notify(`Started: ${t.title}`, started.type === 'run' ? 'Handed off to a background run.' : 'Its session is open.', started);
     } catch (e) {
       store.setTodoStart(t.id, { startAt: null, startMissed: at, startError: e.message });
@@ -596,7 +643,7 @@ function registerIpc() {
   handle('todo:update', (id, patch) => store.updateTodo(id, patch));
   handle('todo:delete', id => store.deleteTodo(id));
   handle('todo:handoff', (todoIds, opts) => startHandoff(todoIds, opts));
-  handle('todo:setStart', (id, patch) => store.setTodoStart(id, cleanTodoStart(patch)));
+  handle('todo:setStart', (id, patch) => setTodoStart(id, patch));
   handle('todo:startNow', id => startTodo(id));
 
   handle('fs:complete', (cwd, query) => files.complete(cwd, query));
@@ -635,7 +682,11 @@ function registerIpc() {
   });
   handle('session:setTrail', (id, trailId) => store.setSessionTrail(id, trailId || null));
 
-  handle('session:create', opts => sessions.create(opts));
+  handle('session:create', opts => {
+    const id = sessions.create(opts);
+    clearTodoStarts(opts?.todoIds);
+    return id;
+  });
   handle('session:buffer', (id, tail) => sessions.buffer(id, tail));
   handle('session:kill', id => sessions.kill(id));
   handle('session:forget', id => { sessions.kill(id); store.forgetSession(id); });
@@ -781,7 +832,14 @@ async function boot() {
     onHook: (id, event, payload) => sessions.handleHook(id, event, payload),
     listTodos: status => store.state.todos.filter(t => status === 'all' || t.status === status),
     addTodo: body => store.addTodo(body),
-    updateTodo: (id, patch) => store.updateTodo(id, patch),
+    // A session can't move a to-do that is set to start on its own: where it starts is the
+    // user's choice, made in Stroll's window.
+    updateTodo: (id, patch) => {
+      if (store.todo(id)?.startAt && patch && (patch.cwd !== undefined || patch.trailId !== undefined)) {
+        return { error: "This to-do is set to start on its own, so its working directory and trail can only be changed in Stroll's window. Ask the user to do it there." };
+      }
+      return store.updateTodo(id, patch);
+    },
     handoffTodo: (id, { instructions, cwd }) => {
       if (!store.todo(id)) return { error: 'no such to-do' };
       try { return { runId: startHandoff([id], { instructions, cwd }), status: 'running' }; } catch (e) { return { error: e.message }; }
@@ -825,9 +883,17 @@ async function boot() {
     pendingState = setTimeout(() => send('state:changed', store.snapshot()), 30);
   });
   sessions.on('data', (id, seq, data) => send('session:data', id, seq, data));
-  sessions.on('exit', id => send('session:exit', id));
+  sessions.on('exit', id => { send('session:exit', id); scheduledStarts.delete(id); });
   sessions.on('size', (id, cols, rows) => send('session:size', id, cols, rows));
-  sessions.on('failed', (id, message) => send('ui:error', message));
+  sessions.on('failed', (id, message) => {
+    send('ui:error', message);
+    // One a schedule opened: it was announced as started, so say that it didn't.
+    const sched = scheduledStarts.get(id);
+    const t = sched && store.todo(sched.todoId);
+    if (!t || t.status !== 'open') return;
+    store.setTodoStart(t.id, { startMissed: sched.at, startError: message });
+    notify(`${t.title} didn't start`, message, { type: 'todo', id: t.id });
+  });
   sessions.on('attention', (id, message, kind) => {
     const looking = isLookingAt('session', id);
     if (looking) markSeen({ type: 'session', id });
