@@ -29,6 +29,7 @@ const S = {
   windowFocused: true,
   query: '', // sidebar search
   searchIdx: 0,
+  searchKey: null, // the row the keyboard cursor is on, as kind:id
 };
 const terms = new Map(); // session id -> { term, fit, el, lastSeq, ready, queue }
 
@@ -157,20 +158,24 @@ function lightMarkdown(text) {
 // notes, a run's prompt) shows as a snippet under the title.
 const searchTerms = () => S.query.toLowerCase().split(/\s+/).filter(Boolean);
 const searching = () => searchTerms().length > 0;
+// The row helpers also draw the lists of the main panel (Overview, a trail's sessions…), which
+// aren't filtered: marks and snippets are for the sidebar, so they're on only while it draws.
+let marking = false;
+const markTerms = () => (marking ? searchTerms() : []);
 function matches(...fields) {
-  const terms = searchTerms();
-  if (!terms.length) return true;
+  const words = searchTerms();
+  if (!words.length) return true;
   const hay = fields.filter(Boolean).join('\n').toLowerCase();
-  return terms.every(t => hay.includes(t));
+  return words.every(t => hay.includes(t));
 }
 // Escaped text with the query's words in <mark>.
 function hl(text) {
   const raw = String(text ?? '');
-  const terms = searchTerms();
-  if (!terms.length || !raw) return esc(raw);
+  const words = markTerms();
+  if (!words.length || !raw) return esc(raw);
   const lower = raw.toLowerCase();
   const marks = new Array(raw.length).fill(false);
-  for (const t of terms) for (let i = lower.indexOf(t); i >= 0; i = lower.indexOf(t, i + t.length)) marks.fill(true, i, i + t.length);
+  for (const t of words) for (let i = lower.indexOf(t); i >= 0; i = lower.indexOf(t, i + t.length)) marks.fill(true, i, i + t.length);
   let out = '';
   for (let i = 0; i < raw.length;) {
     let j = i;
@@ -182,10 +187,10 @@ function hl(text) {
 }
 // Where the query matches in text the row doesn't show, as a short highlighted line.
 function snippet(shown, ...hidden) {
-  const terms = searchTerms();
-  if (!terms.length) return '';
+  const words = markTerms();
+  if (!words.length) return '';
   const visible = shown.filter(Boolean).join(' ').toLowerCase();
-  const missing = terms.filter(t => !visible.includes(t));
+  const missing = words.filter(t => !visible.includes(t));
   if (!missing.length) return '';
   for (const field of hidden) {
     const flat = String(field || '').replace(/\s+/g, ' ');
@@ -248,14 +253,20 @@ function needsYou(d) {
 }
 
 // ---------- sidebar ----------
-const todoMatches = t => matches(t.title, t.notes, t.cwd);
-const sessionMatches = s => matches(s.title, s.preview, s.cwd, s.firstMessage);
-const runMatches = r => matches(r.title, r.prompt, r.lastActivity, r.result, r.cwd);
-const workflowMatches = w => matches(w.name, w.template, w.prepareTemplate, w.cwd);
-const trailMatches = tr => matches(tr.title, tr.notes, tr.cwd);
-const recentMatches = r => matches(r.title, r.cwd);
+// Folders are matched as they're shown (~/proj): the full path would make "users" match
+// everything.
+const todoMatches = t => matches(t.title, t.notes, shortDir(t.cwd));
+const sessionMatches = s => matches(s.title, s.preview, shortDir(s.cwd), s.firstMessage);
+const runMatches = r => matches(r.title, r.prompt, r.lastActivity, r.result, shortDir(r.cwd));
+const workflowMatches = w => matches(w.name, w.template, w.prepareTemplate, shortDir(w.cwd));
+const trailMatches = tr => matches(tr.title, tr.notes, shortDir(tr.cwd));
+const recentMatches = r => matches(r.title, shortDir(r.cwd));
 
 function renderSidebar() {
+  marking = true;
+  try { drawSidebar(); } finally { marking = false; }
+}
+function drawSidebar() {
   const d = S.data;
   const q = searching();
   const open = d.todos.filter(t => t.status === 'open' && todoMatches(t)).sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
@@ -395,7 +406,7 @@ function trailRow(tr) {
   return `<li class="row ${isActive ? 'active' : ''} ${tr.status === 'archived' ? 'dim' : ''}" data-kind="trail" data-id="${esc(tr.id)}" title="${esc(shortDir(tr.cwd || ''))}">
     ${dotHtml(trailDot(tr))}
     <div class="main"><div class="title-line"><span class="title">${hl(tr.title)}</span>${badge}</div>
-    ${snippet([tr.title], tr.notes, tr.cwd) || `<div class="sub">${esc(trailSub(tr))}</div>`}</div>
+    ${snippet([tr.title], tr.notes, shortDir(tr.cwd)) || `<div class="sub">${esc(trailSub(tr))}</div>`}</div>
     <span class="row-actions"><button class="icon-btn" data-act="trail-start" title="New session on this trail">${ICON.play}</button></span>
   </li>`;
 }
@@ -454,7 +465,7 @@ function todoRow(t) {
     ? `<span class="reminder" title="Reminder ${esc(new Date(t.remindAt).toLocaleString())}">${ICON.clock}</span>` : '';
   return `<li class="row ${isActive ? 'active' : ''} ${S.selected.has(t.id) ? 'selected' : ''}" data-kind="todo" data-id="${esc(t.id)}">
     <button class="check ${done ? 'done' : ''}" data-act="toggle" title="${done ? 'Reopen' : 'Mark done'}">${ICON.check}</button>
-    <div class="main"><div class="title">${hl(t.title)}</div>${snippet([t.title], t.notes, t.cwd)}</div>
+    <div class="main"><div class="title">${hl(t.title)}</div>${snippet([t.title], t.notes, shortDir(t.cwd))}</div>
     <span class="meta">${pillHtml(todoState(t))}${reminder}</span>
     ${done ? '' : `<span class="row-actions">${work ? `<button class="icon-btn" data-act="goto-work" title="Go to its ${work.type === 'session' ? 'session' : 'background run'}">${workIcon(work)}</button>` : ''}<button class="icon-btn" data-act="start" title="${work ? 'Start another session' : 'Start a session'}">${ICON.play}</button><button class="icon-btn" data-act="handoff" title="Hand off to a background run">${ICON.handoff}</button></span>`}
   </li>`;
@@ -467,7 +478,7 @@ function sessionRow(s) {
   return `<li class="row ${isActive ? 'active' : ''} ${s.live ? '' : 'dim'}" data-kind="session" data-id="${esc(s.id)}" title="${esc(shortDir(s.cwd))}">
     ${dotHtml(sessionDot(s))}
     <div class="main"><div class="title-line"><span class="title">${hl(s.title || 'Untitled session')}</span>${bgBadge(s)}${s.muted ? `<span class="muted-icon" title="Notifications muted">${ICON.mute}</span>` : ''}<span class="when">${ago(s.lastActivityAt)}</span></div>
-    ${snippet([s.title, preview], s.firstMessage, s.cwd) || `<div class="sub">${hl(preview)}</div>`}</div>
+    ${snippet([s.title, preview], s.firstMessage, shortDir(s.cwd)) || `<div class="sub">${hl(preview)}</div>`}</div>
   </li>`;
 }
 
@@ -479,7 +490,7 @@ function runRow(r) {
   return `<li class="row ${isActive ? 'active' : ''} ${r.status === 'reviewed' ? 'dim' : ''}" data-kind="run" data-id="${esc(r.id)}">
     ${dotHtml(runDot(r))}
     <div class="main"><div class="title-line"><span class="title">${hl(r.title)}</span><span class="when">${ago(r.finishedAt || r.startedAt)}</span></div>
-    ${snippet([r.title, preview], r.prompt, r.result, r.cwd) || `<div class="sub">${hl(preview)}</div>`}</div>
+    ${snippet([r.title, preview], r.prompt, r.result, r.lastActivity, shortDir(r.cwd)) || `<div class="sub">${hl(preview)}</div>`}</div>
   </li>`;
 }
 
@@ -1683,34 +1694,53 @@ $('#new-workflow-btn').addEventListener('click', async () => {
 // ---------- sidebar search: filters every section as you type ----------
 // ↑↓ move through the matches, Enter opens one (as a click would), Esc clears.
 const searchRows = () => [...$('#sidebar-scroll').querySelectorAll('section:not([hidden]) .row[data-kind]')].filter(el => el.offsetParent);
+// The cursor stays on its row, not on its position: live sessions reorder as they work, and
+// Enter must open the one that was marked.
+const rowKeyOf = el => `${el.dataset.kind}:${el.dataset.id}`;
 function markSearchCursor() {
-  const rows = searchRows();
   for (const el of $('#sidebar-scroll').querySelectorAll('.row.kbd')) el.classList.remove('kbd');
-  if (!searching() || !rows.length) return;
-  S.searchIdx = Math.max(0, Math.min(S.searchIdx, rows.length - 1));
+  if (!searching()) return; // this runs on every state push
+  const rows = searchRows();
+  if (!rows.length) return;
+  const at = rows.findIndex(el => rowKeyOf(el) === S.searchKey);
+  S.searchIdx = Math.max(0, Math.min(at >= 0 ? at : S.searchIdx, rows.length - 1));
+  S.searchKey = rowKeyOf(rows[S.searchIdx]);
   rows[S.searchIdx].classList.add('kbd');
 }
 function setQuery(q) {
   S.query = q;
   S.searchIdx = 0;
-  $('#search').classList.toggle('has-query', !!q);
-  if (searching() && !S.recentLoaded) refreshRecent();
+  S.searchKey = null;
+  $('#search').classList.toggle('has-query', searching());
+  if (!S.data) return; // typed before the first state arrived: the first render picks it up
+  // Elsewhere is searched too; its list is loaded once, however fast the typing.
+  if (searching() && !S.recentLoaded && !S.recentLoading) {
+    S.recentLoading = true;
+    refreshRecent().finally(() => { S.recentLoading = false; });
+  }
   applySidebarLayout();
   renderSidebar();
-  if (S.view.type === 'home') renderMain();
 }
 const searchInput = $('#search-input');
 searchInput.addEventListener('input', () => setQuery(searchInput.value));
 searchInput.addEventListener('keydown', e => {
+  if (e.isComposing) return; // Enter that confirms an IME composition isn't "open"
   if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
     e.preventDefault();
     S.searchIdx += e.key === 'ArrowDown' ? 1 : -1;
+    S.searchKey = null;
     markSearchCursor();
     $('#sidebar-scroll .row.kbd')?.scrollIntoView({ block: 'nearest' });
   } else if (e.key === 'Enter') {
     e.preventDefault();
+    if (!searching()) return; // nothing searched: Enter isn't "open the first thing in the sidebar"
     const row = $('#sidebar-scroll .row.kbd') || searchRows()[0];
-    if (row) row.querySelector('.main')?.click();
+    if (!row) return;
+    row.querySelector('.main')?.click();
+    // Opening a session moves the keyboard to its terminal, where Esc interrupts Claude: the
+    // search is over, so it's cleared and Esc can't be meant for it any more.
+    searchInput.value = '';
+    setQuery('');
   } else if (e.key === 'Escape') {
     e.stopPropagation();
     if (searchInput.value) { searchInput.value = ''; setQuery(''); return; }
@@ -2005,7 +2035,7 @@ function workflowRow(w) {
   const isActive = S.view.type === 'workflow' && S.view.id === w.id;
   return `<li class="row ${isActive ? 'active' : ''}" data-kind="workflow" data-id="${esc(w.id)}">
     ${dotHtml(workflowDot(w))}
-    <div class="main"><div class="title">${hl(w.name)}</div>${snippet([w.name], w.template, w.prepareTemplate, w.cwd) || `<div class="sub">${esc(workflowStatus(w))}</div>`}</div>
+    <div class="main"><div class="title">${hl(w.name)}</div>${snippet([w.name], w.template, w.prepareTemplate, shortDir(w.cwd)) || `<div class="sub">${esc(workflowStatus(w))}</div>`}</div>
     <span class="row-actions"><button class="icon-btn" data-act="wf-start" title="Start">${ICON.play}</button></span>
   </li>`;
 }
