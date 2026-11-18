@@ -929,7 +929,7 @@ function renderTrail(header, panel) {
 
   const notes = $('#trail-notes');
   notes.dataset.base = tr.notes;
-  const notesEd = MdEditor.attach(notes, { cwd: () => $('#trail-cwd')?.value.trim() || S.data.config.defaultCwd, rows: 8 });
+  const notesEd = MdEditor.attach(notes, { cwd: () => $('#trail-cwd')?.value.trim() || S.data.config.defaultCwd, rows: 11 });
   const notesHelp = () => {
     const n = wordCount(notes.value);
     $('#trail-notes-help').innerHTML = `${n ? `${n.toLocaleString()} word${n === 1 ? '' : 's'}. ` : ''}Sessions on this trail suggest additions as they learn things; you accept them above. Ask Claude to “add this to the trail” to write one right away.`
@@ -2096,12 +2096,13 @@ function renderWorkflow(header, panel) {
 
   const save = patch => api.invoke('workflow:update', w.id, patch);
   const on = (sel, ev, fn) => panel.querySelector(sel).addEventListener(ev, fn);
-  const cwd = () => $('#wf-cwd')?.value.trim() || S.data.config.defaultCwd;
+  // References are checked where the workflow will run: its folder, else its trail's.
+  const cwd = () => $('#wf-cwd')?.value.trim() || trail($('#wf-trail')?.value)?.cwd || S.data.config.defaultCwd;
   const eds = [MdEditor.attach($('#wf-template'), { cwd, blanks: true, rows: 3 }), MdEditor.attach($('#wf-prepare'), { cwd, blanks: true, rows: 2 })];
   on('#wf-name', 'change', e => { const v = e.target.value.trim(); if (v) save({ name: v }); });
   on('#wf-cwd', 'change', e => { save({ cwd: e.target.value.trim() || null }); eds.forEach(ed => ed.refresh()); });
   on('#wf-trail', 'change', async e => {
-    if (e.target.value !== '__new') return save({ trailId: e.target.value || null });
+    if (e.target.value !== '__new') { eds.forEach(ed => ed.refresh()); return save({ trailId: e.target.value || null }); }
     const cur = workflow(w.id) || w;
     const tr = await api.invoke('trail:add', { title: cur.name, cwd: cur.cwd, workflowId: w.id });
     e.target.blur();

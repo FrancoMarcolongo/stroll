@@ -6,9 +6,10 @@ const path = require('path');
 // list of referenced files that goes to Claude with a to-do's notes.
 
 const HOME = os.homedir();
-// "@" at the start of a word, then a path that doesn't end in punctuation. Same pattern as the
-// editor's highlighter (src/renderer/mdeditor.js).
-const REF_RE = /(?:^|(?<=[\s([]))@([^\s"'`()[\]{}<>,;]*[^\s"'`()[\]{}<>,;.:!?])/g;
+// "@" at the start of a word, then a path that doesn't end in punctuation. A path with spaces,
+// brackets or other punctuation goes in quotes, as in Claude Code: @"notes/plan (v2).md".
+// Same pattern as the editor's highlighter (src/renderer/mdeditor.js).
+const REF_RE = /(?:^|(?<=[\s([]))@(?:"([^"\n]+)"|([^\s"'`()[\]{}<>,;]*[^\s"'`()[\]{}<>,;.:!?]))/g;
 // Never listed in fuzzy completion: big, generated or private.
 const SKIP_DIRS = new Set(['node_modules', 'dist', 'build', 'out', 'target', 'coverage', 'vendor', '__pycache__', 'venv', 'Library', 'Applications']);
 const WALK_MAX = 20000;
@@ -40,8 +41,9 @@ function displayPath(cwd, abs) {
 const kindOf = abs => {
   try { return fs.statSync(abs).isDirectory() ? 'dir' : 'file'; } catch (_) { return null; }
 };
+const kindOfAsync = abs => fs.promises.stat(abs).then(st => (st.isDirectory() ? 'dir' : 'file'), () => null);
 
-const refsIn = text => [...String(text || '').matchAll(REF_RE)].map(m => m[1]);
+const refsIn = text => [...String(text || '').matchAll(REF_RE)].map(m => m[1] ?? m[2]);
 
 // Breadth-first, bounded by count and time, skipping hidden and generated folders. Symlinks
 // aren't followed. Cached per folder for a short while; typing "@" again reuses it.
@@ -149,18 +151,30 @@ async function peek(cwd, p) {
   }
 }
 
-// Which of these references exist: { ref: 'file' | 'dir' | 'missing' }.
-function refKinds(cwd, refs) {
-  const out = {};
-  for (const r of (refs || []).slice(0, 200)) out[r] = kindOf(resolveRef(cwd, r)) || 'missing';
-  return out;
+// Which of these references exist: { ref: 'file' | 'dir' | 'missing' }. Asked for on every
+// pause in typing, so it never blocks on a slow disk.
+async function refKinds(cwd, refs) {
+  const list = (Array.isArray(refs) ? refs : []).slice(0, 200).map(String);
+  const kinds = await Promise.all(list.map(r => kindOfAsync(resolveRef(cwd, r))));
+  return Object.fromEntries(list.map((r, i) => [r, kinds[i] || 'missing']));
 }
 
-// A line for Claude listing the files the text references, by absolute path, so it can read
+// A line for Claude listing the files the texts reference, by absolute path, so it can read
 // them even where Claude Code doesn't expand "@" itself (system prompts, background runs).
-function refsNote(text, cwd) {
-  const found = [...new Set(refsIn(text).map(r => resolveRef(cwd, r)))].filter(p => kindOf(p));
-  return found.length ? `Files and folders referenced with @ (read them for context):\n${found.map(p => `- ${p}`).join('\n')}` : '';
+// Each text comes with the folders its references are looked up in, first hit wins: the folder
+// its editor checked them against (the to-do's, the trail's), then the one the work runs in.
+// So what the editor showed as found is what Claude is given, wherever the session starts.
+function refsNote(parts) {
+  const found = new Set();
+  for (const { text, dirs } of parts) {
+    const bases = [...new Set((dirs || []).filter(validDir))];
+    if (!bases.length) bases.push(HOME);
+    for (const r of refsIn(text)) {
+      const hit = bases.map(d => resolveRef(d, r)).find(kindOf);
+      if (hit) found.add(hit);
+    }
+  }
+  return found.size ? `Files and folders referenced with @ (read them for context):\n${[...found].map(p => `- ${p}`).join('\n')}` : '';
 }
 
 module.exports = { complete, peek, refKinds, refsNote, refsIn, displayPath, resolveRef };

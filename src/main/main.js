@@ -44,7 +44,12 @@ const lastNotified = new Map();
 
 
 function handoffPrompt(todos, instructions, cwd, trail = null) {
-  const refs = files.refsNote([...todos.map(t => t.notes), trail?.notes, instructions].join('\n'), cwd);
+  // Notes' references are looked up where their editor checked them, then in the run's folder.
+  const refs = files.refsNote([
+    ...todos.map(t => ({ text: t.notes, dirs: [t.cwd || store.trail(t.trailId)?.cwd || config.defaultCwd, cwd] })),
+    { text: trail?.notes, dirs: [trail?.cwd || config.defaultCwd, cwd] },
+    { text: instructions, dirs: [cwd] },
+  ]);
   return [
     todos.length === 1 ? `Work on this to-do from the user's list: ${todos[0].title}`
       : todos.length ? "Work on these to-dos from the user's list:" : `Work on this, for the user's trail "${trail?.title}".`,
@@ -222,6 +227,17 @@ const trailRunContext = trail => (trail
   ? `This run is part of the user's trail "${trail.title}", a piece of work that takes many sessions. Its notes, the context the user keeps for that work:\n${trail.notes.trim() || '(empty)'}`
   : null);
 
+// A workflow's background run: its trail's notes, and the files its message and those notes
+// reference with @ (a session expands @ in its first message itself; a run doesn't).
+function workflowRunContext(text, trail, cwd) {
+  const dir = cwd || config.defaultCwd;
+  const refs = files.refsNote([
+    { text, dirs: [dir] },
+    { text: trail?.notes, dirs: [trail?.cwd || config.defaultCwd, dir] },
+  ]);
+  return [trailRunContext(trail), refs].filter(Boolean).join('\n\n') || null;
+}
+
 // Starts a workflow with the values from its start form, which are kept for next time. What it
 // starts goes on the workflow's trail, or on the one picked for this start (null: none).
 function startWorkflow(id, values = {}, { trailId } = {}) {
@@ -235,7 +251,7 @@ function startWorkflow(id, values = {}, { trailId } = {}) {
   const trail = store.trail(trailId !== undefined ? trailId : wf.trailId) || null;
   const cwd = wf.cwd || trail?.cwd || null;
   if (wf.mode === 'run') {
-    return { type: 'run', id: runs.start({ prompt: text, cwd, title, workflowId: id, allowAll: wf.runAllowAll, trailId: trail?.id || null, context: trailRunContext(trail), writeDirs: wf.writeDirs || [] }) };
+    return { type: 'run', id: runs.start({ prompt: text, cwd, title, workflowId: id, allowAll: wf.runAllowAll, trailId: trail?.id || null, context: workflowRunContext(text, trail, cwd), writeDirs: wf.writeDirs || [] }) };
   }
   return { type: 'session', id: sessions.create({ cwd, title, firstMessage: text, workflowId: id, trailId: trail?.id || null }) };
 }
@@ -247,9 +263,10 @@ function prepareWorkflow(id, at = new Date().toISOString(), scheduled = false) {
   const text = renderTemplate(wf.prepareTemplate || wf.template, wf.values);
   if (!text) throw new Error('This workflow has no first message yet. Add one under Setup.');
   const trail = store.trail(wf.trailId) || null;
+  const cwd = wf.cwd || trail?.cwd || null;
   const runId = runs.start({
-    prompt: text, cwd: wf.cwd || trail?.cwd || null, title: `${wf.name} · prepared ${shortDate()}`, workflowId: id, allowAll: wf.runAllowAll,
-    trailId: trail?.id || null, context: trailRunContext(trail), writeDirs: wf.writeDirs || [],
+    prompt: text, cwd, title: `${wf.name} · prepared ${shortDate()}`, workflowId: id, allowAll: wf.runAllowAll,
+    trailId: trail?.id || null, context: workflowRunContext(text, trail, cwd), writeDirs: wf.writeDirs || [],
   });
   store.updateWorkflow(id, { due: { at, missed: false, runId, scheduled } });
   return { type: 'run', id: runId };

@@ -115,11 +115,10 @@ function todoContext(todos) {
 
 // Appended to the system prompt when the session starts (and again on every resume, so a
 // resumed session gets the notes as they are now).
-// Files the trail's or to-dos' notes reference with @ are listed by absolute path, so Claude can
-// read them: Claude Code doesn't expand "@" in a system prompt.
-function sessionContext(trail, todos, longWords, dir) {
+// `refs` lists the files the trail's or to-dos' notes reference with @, by absolute path, so
+// Claude can read them: Claude Code doesn't expand "@" in a system prompt.
+function sessionContext(trail, todos, longWords, refs = '') {
   if (!trail && !todos.length) return null;
-  const refs = refsNote([trail?.notes, ...todos.map(t => t.notes)].join('\n'), dir);
   return [
     "This session was started from Stroll, the user's session manager.",
     trail ? trailContext(trail, longWords) : null,
@@ -177,7 +176,13 @@ class Sessions extends EventEmitter {
     const args = ['--mcp-config', this.paths.mcpConfig, '--settings', this.paths.hookSettings];
     args.push(...(resumable ? ['--resume', resumable] : ['--session-id', id]));
     if (!resumable && (title || existing?.title)) args.push('--name', title || existing.title);
-    const context = sessionContext(trail, todos, Number(this.config.trails?.condenseAtWords) || undefined, dir);
+    // Notes' references are looked up where their editor checked them, then in this folder.
+    const home = this.config.defaultCwd;
+    const refs = refsNote([
+      { text: trail?.notes, dirs: [trail?.cwd || home, dir] },
+      ...todos.map(t => ({ text: t.notes, dirs: [t.cwd || this.store.trail(t.trailId)?.cwd || home, dir] })),
+    ]);
+    const context = sessionContext(trail, todos, Number(this.config.trails?.condenseAtWords) || undefined, refs);
     if (context) args.push('--append-system-prompt', context);
     if (firstMessage && firstMessage.trim()) args.push('--', firstMessage.trim());
 

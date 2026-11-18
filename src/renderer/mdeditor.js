@@ -3,7 +3,9 @@
    One view, no preview pane: the text stays plain markdown in a textarea, and a highlight
    layer drawn under it styles it in place (headings, emphasis, lists, code, @ references,
    workflow blanks), so what you see is exactly what Claude gets. Both layers use the same
-   monospace font and only change colour and weight, which keeps the caret aligned.
+   monospace font and only change colour and weight, which keeps the caret aligned. The
+   highlight layer is the one in the page's flow: it sets the editor's height as the text
+   grows, and the textarea covers it exactly, so nothing has to be measured or resized.
 
    On top of that: a toolbar, list continuation, prompt structures, and "@" completion over
    the local file system with a preview of the file or folder (src/main/files.js). */
@@ -14,12 +16,15 @@
   const modKey = e => (IS_MAC ? e.metaKey && !e.ctrlKey : e.ctrlKey && !e.metaKey) && !e.altKey && !e.shiftKey;
   const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
-  // Same reference pattern as src/main/files.js.
-  const REF_RE = /(?:^|(?<=[\s([]))@([^\s"'`()[\]{}<>,;]*[^\s"'`()[\]{}<>,;.:!?])/g;
+  // Same reference pattern as src/main/files.js: @path, or @"a path with spaces or (brackets)".
+  const REF_RE = /(?:^|(?<=[\s([]))@(?:"([^"\n]+)"|([^\s"'`()[\]{}<>,;]*[^\s"'`()[\]{}<>,;.:!?]))/g;
   // Inline markup, first match wins: code, bold, {{blank}}, @ref, [link](url), italic.
-  const INLINE = /(`[^`\n]+`)|(\*\*[^*\n]+\*\*|__[^_\n]+__)|(\{\{[^}\n]*\}\})|((?:^|(?<=[\s([]))@[^\s"'`()[\]{}<>,;]*[^\s"'`()[\]{}<>,;.:!?])|(\[[^\]\n]+\]\([^)\s]+\))|((?<![\w*])\*(?![\s*])[^*\n]+?\*(?![\w*])|(?<![\w_])_(?![\s_])[^_\n]+?_(?![\w_]))/g;
-  // What's being typed after "@", up to the caret.
-  const TYPING_REF = /(?:^|[\s([])@([^\s"'`()[\]{}<>,;@]*)$/;
+  const INLINE = /(`[^`\n]+`)|(\*\*[^*\n]+\*\*|__[^_\n]+__)|(\{\{[^}\n]*\}\})|((?:^|(?<=[\s([]))@(?:"[^"\n]+"|[^\s"'`()[\]{}<>,;]*[^\s"'`()[\]{}<>,;.:!?]))|(\[[^\]\n]+\]\([^)\s]+\))|((?<![\w*])\*(?![\s*])[^*\n]+?\*(?![\w*])|(?<![\w_])_(?![\s_])[^_\n]+?_(?![\w_]))/g;
+  // What's being typed after "@", up to the caret: inside an open quote, or a bare path.
+  const TYPING_REF = /(?:^|[\s([])@(?:"([^"\n]*)|([^\s"'`()[\]{}<>,;]*))$/;
+  // A path the bare form can hold; any other is written in quotes (one with a quote in it can't be).
+  const BARE_PATH = /^[^\s"'`()[\]{}<>,;]*[^\s"'`()[\]{}<>,;.:!?]$/;
+  const refText = p => (BARE_PATH.test(p) || p.includes('"') ? `@${p}` : `@"${p}"`);
 
   const mk = s => `<span class="md-mk">${esc(s)}</span>`;
 
@@ -34,7 +39,7 @@
       else if (m[2]) out += `<span class="md-b">${mk(t.slice(0, 2))}${inline(t.slice(2, -2), o)}${mk(t.slice(-2))}</span>`;
       else if (m[3]) out += o.blanks ? `<span class="md-blank">${esc(t)}</span>` : esc(t);
       else if (m[4]) {
-        const kind = o.refs ? (o.refs.get(o.refKey(t.slice(1))) || 'pending') : '';
+        const kind = o.refs ? (o.refs.get(o.refKey(t[1] === '"' ? t.slice(2, -1) : t.slice(1))) || 'pending') : '';
         const title = { file: 'File', dir: 'Folder', missing: 'Not found' }[kind];
         out += `<span class="md-ref ${kind}"${title ? ` title="${title}"` : ''}>${esc(t)}</span>`;
       } else if (m[5]) {
@@ -197,13 +202,18 @@
     if (!ed || !it) return close();
     if (pop.mode === 'structure') { close(); return ed.insertStructure(it.text); }
     const ta = ed.ta;
-    const text = `@${it.path}${it.dir ? '' : ' '}`;
-    // A folder keeps the popup open on its contents (the input event re-queries).
-    return ed.replace(pop.at, ta.selectionStart, text, pop.at + text.length);
+    const ref = refText(it.path);
+    const quoted = ref[1] === '"';
+    // Typed inside quotes, the closing one right after the caret goes with what's replaced.
+    const end = ta.selectionStart + (pop.quoted && ta.value[ta.selectionStart] === '"' ? 1 : 0);
+    if (!it.dir) return ed.replace(pop.at, end, `${ref} `, pop.at + ref.length + 1);
+    // A folder keeps the popup open on its contents: the caret stays inside the quotes, if any.
+    ed.replace(pop.at, end, ref, pop.at + ref.length - (quoted ? 1 : 0));
+    return ed.complete();
   }
 
   function popKey(e) {
-    if (!pop.mode || pop.el.hidden) return false;
+    if (!pop.mode || pop.el.hidden || e.isComposing) return false;
     const n = pop.items.length;
     if (e.key === 'ArrowDown' && n) { pop.idx = (pop.idx + 1) % n; paintPop(); }
     else if (e.key === 'ArrowUp' && n) { pop.idx = (pop.idx - 1 + n) % n; paintPop(); }
@@ -214,8 +224,20 @@
     return true;
   }
 
+  // Typing on the last line scrolls the page to keep the caret in view: the completion follows
+  // the caret instead of closing (it closes once the caret is out of sight). Other lists
+  // scrolling, like the sidebar when something updates, don't concern it.
+  function placeAtCaret() {
+    const xy = caretXY(pop.ed.ta, pop.at);
+    if (xy.y + xy.h < 0 || xy.y > window.innerHeight) return close();
+    return place(xy.x - 10, xy.y, xy.y + xy.h);
+  }
   window.addEventListener('resize', close);
-  document.addEventListener('scroll', e => { if (pop.el && !pop.el.contains(e.target)) close(); }, true);
+  document.addEventListener('scroll', e => {
+    if (!pop.el || pop.el.hidden || !pop.ed || pop.el.contains(e.target)) return;
+    if (!e.target.contains?.(pop.ed.wrap)) return;
+    if (pop.mode === 'refs') placeAtCaret(); else close();
+  }, true);
 
   // ---------- an editor ----------
   function attach(ta, opts = {}) {
@@ -230,19 +252,16 @@
     wrap.querySelector('.mde-body').appendChild(ta);
     ta.classList.add('mde-input');
     ta.removeAttribute('rows');
-    ta.style.setProperty('--rows', o.rows);
+    wrap.style.setProperty('--rows', o.rows);
     const hl = wrap.querySelector('.mde-hl');
     const refs = new Map(); // `${cwd}\n${ref}` -> 'file' | 'dir' | 'missing'
     const refKey = r => `${o.cwd()}\n${r}`;
     let refTimer = null;
 
-    const paint = () => {
-      hl.innerHTML = `${highlight(ta.value, { blanks: o.blanks, refs, refKey })} `;
-      hl.scrollTop = ta.scrollTop;
-    };
+    const paint = () => { hl.innerHTML = `${highlight(ta.value, { blanks: o.blanks, refs, refKey })} `; };
     const checkRefs = () => {
       clearTimeout(refTimer);
-      const unknown = [...new Set([...ta.value.matchAll(REF_RE)].map(m => m[1]))].filter(r => !refs.has(refKey(r)));
+      const unknown = [...new Set([...ta.value.matchAll(REF_RE)].map(m => m[1] ?? m[2]))].filter(r => !refs.has(refKey(r)));
       if (!unknown.length) return;
       const cwd = o.cwd();
       refTimer = setTimeout(async () => {
@@ -252,15 +271,6 @@
         paint();
       }, 250);
     };
-    const scroller = () => { let p = wrap.parentElement; while (p && p !== document.body) { if (p.scrollHeight > p.clientHeight && /auto|scroll/.test(getComputedStyle(p).overflowY)) return p; p = p.parentElement; } return null; };
-    const grow = () => {
-      const sc = scroller();
-      const top = sc?.scrollTop;
-      ta.style.height = 'auto';
-      ta.style.height = `${ta.scrollHeight + 2}px`;
-      if (sc) sc.scrollTop = top;
-    };
-
     // Edits go through insertText so they land in the textarea's own undo history.
     const replace = (start, end, text, selStart = null, selEnd = null) => {
       ta.focus();
@@ -323,18 +333,18 @@
       const c = ta.selectionStart;
       const m = ta.value.slice(Math.max(0, c - 400), c).match(TYPING_REF);
       if (!m) { if (pop.ed === ed && pop.mode === 'refs') close(); return; }
-      const query = m[1];
-      const at = c - query.length - 1;
+      const quoted = m[1] !== undefined;
+      const query = quoted ? m[1] : m[2];
+      const at = c - query.length - (quoted ? 2 : 1);
       const seq = ++pop.seq;
       let items;
       try { items = await api.invoke('fs:complete', o.cwd(), query); } catch (_) { items = []; }
       if (seq !== pop.seq || document.activeElement !== ta) return;
       popEl();
-      Object.assign(pop, { ed, mode: 'refs', items, idx: 0, at });
+      Object.assign(pop, { ed, mode: 'refs', items, idx: 0, at, quoted });
       pop.el.hidden = false;
       paintPop();
-      const xy = caretXY(ta, at);
-      place(xy.x - 10, xy.y, xy.y + xy.h);
+      placeAtCaret();
     };
 
     const insertRefs = async paths => {
@@ -343,11 +353,11 @@
       try { shown = await api.invoke('fs:display', o.cwd(), paths); } catch (_) { shown = paths; }
       const s = ta.selectionStart;
       const lead = s > 0 && !/\s/.test(ta.value[s - 1]) ? ' ' : '';
-      replace(s, ta.selectionEnd, `${lead}${shown.map(p => `@${p}`).join(' ')} `);
+      replace(s, ta.selectionEnd, `${lead}${shown.map(refText).join(' ')} `);
     };
 
     const ed = {
-      ta, wrap, cwd: () => o.cwd(), replace,
+      ta, wrap, cwd: () => o.cwd(), replace, complete,
       browse: async () => insertRefs(await api.invoke('dialog:pickFiles', o.cwd())),
       insertStructure: text => {
         const { selectionStart: s, selectionEnd: e, value: v } = ta;
@@ -359,7 +369,7 @@
         replace(s, e, lead + body, s + lead.length + caret + sel.length);
       },
       // After a programmatic value change, or when the folder changed (references re-check).
-      refresh: () => { paint(); checkRefs(); grow(); },
+      refresh: () => { paint(); checkRefs(); },
     };
 
     wrap.querySelector('.mde-bar').addEventListener('mousedown', e => { if (e.target.closest('[data-tool]')) e.preventDefault(); });
@@ -367,12 +377,15 @@
       const b = e.target.closest('[data-tool]');
       if (b) TOOL[b.dataset.tool](b);
     });
-    ta.addEventListener('input', () => { paint(); checkRefs(); grow(); complete(); });
-    ta.addEventListener('scroll', () => { hl.scrollTop = ta.scrollTop; });
+    ta.addEventListener('input', () => { paint(); checkRefs(); complete(); });
+    // The textarea is as tall as its text, so it never scrolls on its own.
+    ta.addEventListener('scroll', () => { if (ta.scrollTop) ta.scrollTop = 0; });
     ta.addEventListener('click', complete);
     ta.addEventListener('keyup', e => { if (['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(e.key)) complete(); });
     ta.addEventListener('blur', () => { if (pop.ed === ed) close(); });
     ta.addEventListener('keydown', e => {
+      // While an input method composes, Enter and Tab confirm its text; they aren't ours.
+      if (e.isComposing || e.keyCode === 229) return;
       if (pop.ed === ed && popKey(e)) return;
       if (modKey(e) && ['b', 'i', 'e'].includes(e.key.toLowerCase())) {
         e.preventDefault();
@@ -428,9 +441,6 @@
       ta.focus();
       insertRefs(paths);
     });
-    // Text rewraps when the width changes; height changes are the editor's own.
-    let width = 0;
-    new ResizeObserver(([entry]) => { const w = Math.round(entry.contentRect.width); if (w !== width) { width = w; grow(); } }).observe(wrap);
     ed.refresh();
     return ed;
   }
