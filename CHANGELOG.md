@@ -2,6 +2,20 @@
 
 Stroll shows the new sections here once, after an update. **Settings › Updates › What's new** shows them all again.
 
+## 0.12.0 — 2026-11-18
+
+### Markdown editors and @ file references
+- **Notes, first messages and instructions are markdown editors** (to-dos, trails, Start, Hand off, workflows). The text stays plain markdown, styled as you type: headings, bold, lists, checklists, code. Enter continues a list, Tab indents it, ⌘B/⌘I/⌘E format, and **Structure** inserts an outline for a prompt.
+- **Type `@` to reference a file or folder,** with completion over the working directory and a preview. Dropping files on an editor, or **Browse…**, adds them too. A path with spaces or brackets goes in quotes, `@"docs/my notes.md"`; completion writes them for you.
+- **References turn green when they exist and red when they don't,** and the files a to-do's or trail's notes reference go to Claude as a list to read. Each is looked up in the note's own working directory first, then in the folder the session starts in.
+
+### To-dos that start on their own
+- **A to-do has a first message:** what Claude gets when it starts. Start and Hand off fill it in.
+- **Start it automatically:** give it a time and Stroll starts it then, as a session or a background run, and tells you (on your phone too).
+- **A session started this way runs as if you had pressed Start,** with your usual Claude Code permissions and nobody watching it. So it only ever starts in the to-do's own working directory, or its trail's: without one it can't be scheduled, and if the folder is gone it doesn't start.
+- **It starts once.** Starting the to-do yourself first cancels the scheduled start. It fires only while Stroll is open and the computer awake; a missed time, or a start that failed, waits in Needs you with **Start now**.
+- Only Stroll's window on the computer can schedule a start. Claude sessions and the phone can't.
+
 ## 0.11.0 — 2026-11-18
 
 ### Search the sidebar
