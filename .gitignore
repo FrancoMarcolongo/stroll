@@ -2,3 +2,7 @@ node_modules/
 .DS_Store
 dist/
 *.log
+.wrangler/
+relay/public/
+android/app/
+android/dist/

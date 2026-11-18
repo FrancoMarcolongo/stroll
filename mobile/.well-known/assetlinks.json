@@ -1,0 +1,9 @@
+[{
+      "relation": ["delegate_permission/common.handle_all_urls"],
+      "target": {
+        "namespace": "android_app",
+        "package_name": "io.github.francomarcolongo.stroll",
+        "sha256_cert_fingerprints": ["46:69:BA:1B:12:A2:EA:29:30:89:51:53:9B:EA:71:2A:DD:B5:81:C4:74:E3:02:70:EE:08:B2:69:B5:78:2F:0F"]
+      }
+    }]
+

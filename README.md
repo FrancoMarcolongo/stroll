@@ -7,6 +7,7 @@ A desktop session manager for [Claude Code](https://claude.com/claude-code). The
 - **Trails for work that spans many sessions.** A trail keeps shared notes, and every session on it starts with them. Sessions suggest what the next one should know; you accept or dismiss the suggestions.
 - **Workflows for recurring work.** Save a session you run every week (a release, a ticket sync) with the blanks it needs; start it in one click, or schedule it.
 - **Background runs.** Hand off research or prep work. A run investigates and drafts, asks you before doing anything outside its read-only list, and pings you when it's ready. You can continue it as a normal session.
+- **Reach it from your phone.** Pair an Android phone and follow your sessions from anywhere: answer one, read what a run found, approve what it asks for, start a workflow. The phone is told when something needs you. Nothing runs on the phone: your computer has to be on and awake.
 
 macOS and Linux.
 
@@ -120,6 +121,25 @@ A workflow is a saved session for work you repeat: a folder, a first message (of
 
 ![Starting a workflow](docs/screenshots/workflow-start.png)
 
+## Phone access
+
+Stroll on a phone is a second view of the Stroll running on your computer. Nothing runs on the phone: sessions and runs stay on the computer, which has to be on and awake. It is remote access to that computer, so treat a paired phone like a key to it.
+
+- **Turn it on** in **Settings › Phone access**, press **Pair a phone** and scan the code with the phone's camera. The code works once, for five minutes.
+- **The app** is for Android 7 or later, with Chrome. Get it from the page the code opens, or at `/stroll.apk` on the relay's address. The same page works in the phone's browser with nothing installed.
+- **What it does:** shows what needs you. Opens a session with its live terminal, a row of keys for prompts (Esc, arrows, Enter) and a message box. Reads a run's report and answers what the run asks for. Adds and ticks to-dos. Starts workflows and new sessions.
+- **Notifications:** turn them on in the phone app. **Notify phones** in Settings says when they're sent: only when you're not at Stroll on the computer (the default), always, or never. A kind turned off under Notifications doesn't reach phones either. They go from your computer to the phone through the browser's push service, encrypted so that service can't read them.
+- **A session's terminal has one size.** Opening it on the phone gives it the phone's size; a click or a key in the computer's window takes it back.
+- **Staying awake:** while phone access is on and something is working, Stroll keeps the computer from going to sleep on its own. Closing the lid still stops everything.
+- **What a phone can't do:** change settings, set up workflows, pair or remove phones, update Stroll, or delete things.
+- **Remove a phone** in **Settings › Phone access**. It's disconnected at once and can't come back without pairing again.
+
+### How it stays private
+
+The phone and the computer can't reach each other directly, so they talk through a relay (`relay/`, a Cloudflare Worker). The relay passes messages and can't read or forge them: they're encrypted between the phone and the computer, with keys exchanged when you pair (`src/shared/channel.js`). It stores nothing.
+
+One thing to know: the phone app's code is served from the relay's address. Whoever runs that address decides what code the app runs, so use a relay you trust or run your own. `relay/README.md` says how, and **Settings › Phone access › Relay** points Stroll at it.
+
 ## Data
 
 Everything Stroll keeps is in `~/.stroll`, readable only by you:
@@ -128,6 +148,7 @@ Everything Stroll keeps is in `~/.stroll`, readable only by you:
 | --- | --- |
 | `state.json` | To-dos, sessions, runs and workflows |
 | `config.json` | Only the settings you changed in Settings |
+| `remote.json` | Phone access: this computer's keys and its paired phones |
 | `runs/*.jsonl` | The raw output of each background run (deleted with the run) |
 | `stroll.log` | The app log |
 
@@ -155,5 +176,9 @@ Debug variables (with `STROLL_HOME`):
 | `src/main/` | Electron main process: sessions (PTYs), runs and their approvals, the local hook/API server, state, config |
 | `src/renderer/` | The UI (vanilla JS and xterm.js) |
 | `src/mcp/stroll-mcp.js` | The `stroll` MCP server: to-do tools for sessions, the permission prompt for runs |
+| `src/shared/channel.js` | The encrypted channel between the app and a paired phone, the same file on both ends |
+| `mobile/` | The phone app (vanilla JS), served by the relay |
+| `relay/` | The relay: a Cloudflare Worker that passes messages between a computer and its phones |
+| `android/` | Builds the Android app, a shell that opens the phone app |
 | `bin/stroll` | The launcher |
 | `docs/screenshots/` | README screenshots (demo data) |

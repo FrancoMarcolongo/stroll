@@ -1,0 +1,11 @@
+{
+  "name": "Stroll",
+  "short_name": "Stroll",
+  "description": "Remote access to the Stroll running on your computer.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#0e1116",
+  "theme_color": "#0e1116",
+  "icons": [{ "src": "icon.png", "sizes": "512x512", "type": "image/png", "purpose": "any" }]
+}

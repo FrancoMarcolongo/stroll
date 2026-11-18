@@ -195,7 +195,7 @@ class Sessions extends EventEmitter {
       throw new Error(`Couldn't start Claude Code: ${e.message}`);
     }
     const now = Date.now();
-    const entry = { proc, chunks: [], size: 0, seq: 0, modes: new Map(), startedAt: now, lastDataAt: now, lastHookAt: 0, gotHook: false, bg: new BackgroundTracker() };
+    const entry = { proc, cols, rows, chunks: [], size: 0, seq: 0, modes: new Map(), startedAt: now, lastDataAt: now, lastHookAt: 0, gotHook: false, bg: new BackgroundTracker() };
     // Claude Code never remembers trust for the home folder ("home trust is session-only"), so
     // every session there, resumed ones too, opens on its "Accessing workspace" prompt. Answer
     // it: in HOME, the folder's project settings are the user's own settings.
@@ -250,18 +250,33 @@ class Sessions extends EventEmitter {
     return id;
   }
 
-  buffer(id) {
+  // `tail`: only about that many chars from the end (whole chunks), for a view that can't take
+  // megabytes of scrollback at once (a phone).
+  buffer(id, tail = 0) {
     const e = this.live.get(id);
     if (!e) return { data: '', seq: 0, modes: '' };
     const modes = [...e.modes].filter(([n]) => !NO_REPLAY_MODES.has(n)).map(([n, v]) => `\x1b[?${n}${v}`).join('');
-    return { data: e.chunks.join(''), seq: e.seq, modes };
+    let chunks = e.chunks;
+    if (tail > 0) {
+      let from = chunks.length;
+      for (let size = 0; from > 0 && size < tail; from -= 1) size += chunks[from - 1].length;
+      chunks = chunks.slice(from);
+    }
+    return { data: chunks.join(''), seq: e.seq, modes, cols: e.cols, rows: e.rows };
   }
 
   write(id, data) { this.live.get(id)?.proc.write(data); }
 
+  // A session's terminal has one size, whoever is looking at it. A view that changes it is
+  // heard by the others (the window, a phone), which can follow or take it back.
   resize(id, cols, rows) {
     const e = this.live.get(id);
-    if (e && cols > 0 && rows > 0) { try { e.proc.resize(cols, rows); } catch (_) { /* process gone */ } }
+    if (!e || !(cols > 0 && rows > 0)) return;
+    try { e.proc.resize(cols, rows); } catch (_) { return; /* process gone */ }
+    if (e.cols === cols && e.rows === rows) return;
+    e.cols = cols;
+    e.rows = rows;
+    this.emit('size', id, cols, rows);
   }
 
   kill(id) { this.live.get(id)?.proc.kill(); }

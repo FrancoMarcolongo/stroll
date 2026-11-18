@@ -1731,7 +1731,20 @@ function runCommand(cmd) {
 api.on('ui:command', runCommand);
 let pendingView = null; // navigation requested (e.g. a notification click) before init finished
 api.on('ui:navigate', view => { if (S.data) navigate(view); else pendingView = view; });
-api.on('ui:window-focus', f => { S.windowFocused = f; });
+// A phone that opens a session gives its terminal the phone's size. Using the window again
+// takes it back: bringing it to the front, or a click or a key in it when it never left the
+// front (picking up the phone doesn't take focus from the computer).
+api.on('ui:window-focus', f => { S.windowFocused = f; if (f) fitVisible(); });
+const sessionSize = new Map(); // session id → the size its terminal has now, whoever set it
+api.on('session:size', (id, cols, rows) => sessionSize.set(id, { cols, rows }));
+function reclaimSize() {
+  if (S.view.type !== 'session') return;
+  const e = terms.get(S.view.id);
+  const size = sessionSize.get(S.view.id);
+  if (e && size && (size.cols !== e.term.cols || size.rows !== e.term.rows)) fitVisible();
+}
+document.addEventListener('pointerdown', reclaimSize, true);
+document.addEventListener('keydown', reclaimSize, true);
 
 async function refreshRecent() {
   S.recent = await api.invoke('recent:list');
@@ -2074,6 +2087,15 @@ function renderSettings(header, panel) {
       ${toggle('set-auto-condense', c.trails.autoCondense, 'Draft shorter notes when a trail’s notes get long', 'Claude rewrites them shorter, with the model of background runs, and the draft waits on the trail. The notes change only if you take it. <b>Condense</b> on a trail does the same when you ask.')}
       <div class="field"><label>Notes are long past</label><div class="inline"><input type="number" id="set-condense-words" min="200" max="20000" step="100" value="${longNotesWords()}" style="flex:none;width:110px"><span class="help" style="margin:0">words</span></div></div>
     </section>
+    <section class="set-group"><h3>Phone access</h3>
+      ${toggle('set-remote-enabled', c.remote.enabled, 'Reach Stroll from your phone', 'This is remote access to this computer. A paired phone can do what you do here, typing into sessions and approving what runs ask for included. Nothing runs on the phone, so this computer has to be on and awake: while something is working Stroll keeps it from going to sleep on its own, but closing the lid still stops everything.')}
+      <div class="field"><label>Relay</label><input type="text" id="set-remote-relay" value="${esc(c.remote.relayUrl)}" placeholder="wss://…" spellcheck="false">
+        <p class="help">Passes messages between this computer and your phones. They’re encrypted between the two, so the relay can’t read them.</p></div>
+      <div class="field"><label>Notify phones</label><select id="set-remote-notify">
+        ${[['away', 'When I’m not at Stroll on this computer'], ['always', 'Always, even about what I’m looking at here'], ['never', 'Never']].map(([v, text]) => `<option value="${v}" ${c.remote.notify === v ? 'selected' : ''}>${text}</option>`).join('')}</select>
+        <p class="help">For phones that turned notifications on. “Not at Stroll” means its window isn’t in front, or this computer hasn’t been touched for a minute and a half. A phone with Stroll on screen isn’t notified in any case. A kind of notification turned off above, under Notifications, doesn’t reach phones either.</p></div>
+      <div id="set-remote-live"></div>
+    </section>
     <section class="set-group"><h3>Updates</h3>
       ${toggle('set-updates', c.updates.check, 'Check for updates automatically', 'Stroll checks its git repository every few hours.')}
       <div class="actions"><button class="btn" data-set="check-updates">${ICON.download}Check now</button><button class="btn ghost" data-set="whats-new">${ICON.sparkle}What’s new</button></div>
@@ -2104,6 +2126,19 @@ function renderSettings(header, panel) {
     e.target.value = n;
     save({ trails: { condenseAtWords: n } });
   });
+  bind('#set-remote-enabled', 'change', e => save({ remote: { enabled: e.target.checked } }));
+  bind('#set-remote-relay', 'change', e => save({ remote: { relayUrl: e.target.value.trim() } }));
+  bind('#set-remote-notify', 'change', e => save({ remote: { notify: e.target.value } }));
+  bind('#set-remote-live', 'click', async e => {
+    if (e.target.closest('[data-remote-pair]')) { pairPhoneModal(); return; }
+    const test = e.target.closest('[data-remote-test]');
+    if (test) { api.invoke('remote:testPush', test.dataset.remoteTest).then(() => flash('Sent. It should be on the phone in a moment.')).catch(flashError); return; }
+    const row = e.target.closest('[data-remote-forget]');
+    if (row && await confirmModal({ title: `Remove “${row.dataset.name}”?`, body: 'It can no longer reach this computer. Pair it again to bring it back.', confirm: 'Remove', danger: true })) {
+      api.invoke('remote:forget', row.dataset.remoteForget);
+    }
+  });
+  api.invoke('remote:get').then(renderRemote).catch(() => {});
   bind('#set-updates', 'change', e => save({ updates: { check: e.target.checked } }));
   bind('[data-set="whats-new"]', 'click', async () => {
     const info = await api.invoke('app:whatsNew', true);
@@ -2115,6 +2150,56 @@ function renderSettings(header, panel) {
     if (!S.update) flash('Stroll is up to date');
   });
 }
+
+// Phone access in Settings: whether this computer is reachable, and the phones paired with it.
+function renderRemote(st) {
+  S.remote = st;
+  const box = $('#set-remote-live');
+  if (!box) return;
+  const line = !st.enabled ? '' : !st.relayUrl ? 'Set the relay to connect.'
+    : st.state === 'online' ? 'Connected to the relay.' : st.state === 'connecting' ? 'Connecting…'
+      : `<span class="warn">Not connected.</span> ${esc(st.error || '')}${st.error ? '.' : ''}`;
+  box.innerHTML = `${line ? `<p class="help" style="margin:0 0 12px">${line}</p>` : ''}
+    <div class="field"><label>Paired phones</label>
+      ${st.devices.map(d => `<div class="device"><div class="main"><div class="title">${esc(d.name)}</div>
+        <div class="sub">${d.connected ? 'Connected now' : d.lastSeenAt ? `Last here ${agoText(d.lastSeenAt)}` : 'Never connected'} · paired ${agoText(d.pairedAt)} · ${!d.notifies ? 'notifications off on the phone'
+    : !d.lastPush ? 'notifications on' : d.lastPush.ok ? `notified ${agoText(d.lastPush.at)}` : `<span class="warn">last notification failed ${agoText(d.lastPush.at)}</span>`}</div></div>
+        ${d.notifies ? `<button class="btn sm ghost" data-remote-test="${esc(d.id)}" title="Send this phone a notification now">Test</button>` : ''}
+        <button class="btn sm ghost" data-remote-forget="${esc(d.id)}" data-name="${esc(d.name)}">Remove</button></div>`).join('') || '<p class="help" style="margin:0">None yet.</p>'}
+    </div>
+    <div class="actions" style="margin-top:12px"><button class="btn" data-remote-pair ${st.state === 'online' ? '' : 'disabled title="Connect to the relay first"'}>${ICON.plus}Pair a phone</button></div>`;
+}
+
+// The pairing code: scanned by the phone, it opens Stroll there and pairs it. It closes by
+// itself when a phone has used it.
+let pairingModal = null;
+async function pairPhoneModal() {
+  let p;
+  try { p = await api.invoke('remote:pair'); } catch (err) { flashError(err); return; }
+  const known = new Set((S.remote?.devices || []).map(d => d.id));
+  modal(`
+    <h2>Pair a phone</h2>
+    <div class="sub">Scan this with the phone’s camera. It opens Stroll on the phone and pairs it with this computer. The code works once, for five minutes.</div>
+    <img class="qr" src="${esc(p.qr)}" alt="Pairing code">
+    <div class="field"><label>Or open this link on the phone</label><input type="text" readonly value="${esc(p.link)}" spellcheck="false"></div>
+    <footer><button class="btn ghost" data-close>Cancel</button></footer>
+  `, (m, close) => {
+    const done = () => { pairingModal = null; close(); };
+    pairingModal = { known, done };
+    const cancel = () => { api.invoke('remote:cancelPair'); done(); };
+    m.querySelector('[data-close]').addEventListener('click', cancel);
+    m.querySelector('input').addEventListener('focus', e => e.target.select());
+    m.addEventListener('keydown', e => { if (e.key === 'Escape') cancel(); });
+    setTimeout(() => { if (pairingModal?.done === done && $('#modal-root img.qr')) { done(); flash('The pairing code expired'); } }, Math.max(0, p.expiresAt - Date.now()));
+  });
+}
+
+api.on('remote:changed', st => {
+  renderRemote(st);
+  if (pairingModal && !$('#modal-root img.qr')) pairingModal = null; // closed by clicking outside it
+  const added = pairingModal && st.devices.find(d => !pairingModal.known.has(d.id));
+  if (added) { pairingModal.done(); flash(`Paired with ${added.name}`, null, { ms: 5000 }); }
+});
 
 // ---------- drag and drop ----------
 // Dropping files on an open session types their paths, shell-quoted, like iTerm or Terminal

@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <!-- Only this site's own scripts run here, and it talks only to the relay: text from the
+       computer (titles, reports, terminal output) can never turn into code on this page.
+       Inline styles are allowed because the terminal writes its own. -->
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' wss: ws:; base-uri 'none'; form-action 'none'">
+  <meta name="referrer" content="no-referrer">
+  <meta name="theme-color" content="#0e1116">
+  <meta name="robots" content="noindex">
+  <title>Stroll</title>
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icon.png">
+  <link rel="apple-touch-icon" href="icon.png">
+  <link rel="stylesheet" href="vendor/xterm.css">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div id="app">
+    <header id="bar"></header>
+    <div id="banner"></div>
+    <div id="getapp"></div>
+    <main id="view"></main>
+  </div>
+  <div id="sheet"></div>
+  <div id="toast" role="status"></div>
+  <script src="vendor/xterm.js"></script>
+  <script src="vendor/addon-fit.js"></script>
+  <script src="vendor/addon-unicode11.js"></script>
+  <script src="channel.js"></script>
+  <script src="link.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

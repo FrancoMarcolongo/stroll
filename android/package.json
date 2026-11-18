@@ -1,0 +1,14 @@
+{
+  "name": "stroll-android",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Builds the Android app: a thin shell that opens Stroll's phone app.",
+  "type": "module",
+  "scripts": {
+    "setup": "node setup-tools.mjs",
+    "build": "node build.mjs"
+  },
+  "devDependencies": {
+    "@bubblewrap/core": "^1.22.0"
+  }
+}

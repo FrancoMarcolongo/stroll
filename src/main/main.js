@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, dialog, shell, Notification, Menu, nativeImage } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, shell, Notification, Menu, nativeImage, powerSaveBlocker, powerMonitor } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const { pathToFileURL, fileURLToPath } = require('url');
@@ -16,6 +16,7 @@ const { paths, loadConfig, saveOverrides, mergeDeep, findOnPath } = require('./c
 const { Store, words, quotedLines } = require('./store');
 const { condenseNotes, killAll: killCondenses } = require('./condense');
 const { cleanWriteDirs } = require('./writable');
+const { Remote, notifyMode, phonesWanted } = require('./remote');
 const { Sessions } = require('./sessions');
 const { Runs } = require('./runs');
 const { Approvals } = require('./approvals');
@@ -32,7 +33,7 @@ app.setName('Stroll');
 if (process.env.STROLL_HOME) app.setPath('userData', path.join(process.env.STROLL_HOME, 'electron-profile'));
 
 let win = null;
-let config; let store; let sessions; let runs; let server; let approvals;
+let config; let store; let sessions; let runs; let server; let approvals; let remote;
 let focusView = null; // what the user is looking at: { type, id }
 let pendingNav = null; // a view to open once a (re)created window has loaded
 let updateInfo = null;
@@ -52,19 +53,36 @@ const handoffPrompt = (todos, instructions, cwd, trail = null) => [
   '\nInvestigate, gather the context needed and prepare drafts so the user can finish this quickly.',
 ].filter(Boolean).join('\n');
 
+// To the window, and to the paired phones that are connected (remote.js picks what they get).
 function send(channel, ...args) {
   if (win && !win.isDestroyed()) win.webContents.send(channel, ...args);
+  remote?.broadcast(channel, args);
 }
 
-function notify(title, body, view, { kind = null, key = null } = {}) {
-  const n = config.notifications || {};
-  if (!Notification.isSupported() || !n.enabled || (kind && n[kind] === false)) return;
+// With phone access on, work in progress keeps the computer from going to sleep on its own:
+// whoever walked away is counting on it to carry on. Closing the lid still stops everything.
+let awake = null;
+function updateAwake() {
+  const want = Boolean(config.remote?.enabled) && sessions.busyCount() + runs.busyCount() > 0;
+  if (want && awake === null) awake = powerSaveBlocker.start('prevent-app-suspension');
+  else if (!want && awake !== null) { powerSaveBlocker.stop(awake); awake = null; }
+}
+
+// A notification here, and on the paired phones when the setting says so (remote.js). A kind
+// turned off under Notifications goes to neither. `phones: false` for what only matters at
+// the computer; `desktop: false` for what the user is looking at here, which a phone set to
+// "always" still hears about.
+function notify(title, body, view, { kind = null, key = null, phones = true, desktop = true } = {}) {
   if (key) {
     // A session finishing turn after turn (e.g. under /loop) pings at most every 20s.
     const last = lastNotified.get(key) || 0;
     if (Date.now() - last < 20000) return;
     lastNotified.set(key, Date.now());
   }
+  const n = config.notifications || {};
+  const wanted = !(kind && n[kind] === false);
+  if (phones && wanted && phonesWanted(config.remote?.notify, atComputer())) remote?.notifyPhones({ title, body, view });
+  if (!desktop || !wanted || !Notification.isSupported() || !n.enabled) return;
   const note = new Notification({ title, body: body || '', silent: n.sound === false });
   shownNotifications.add(note);
   const forget = () => shownNotifications.delete(note);
@@ -73,8 +91,17 @@ function notify(title, body, view, { kind = null, key = null } = {}) {
   note.show();
 }
 
+// Is someone at the computer with Stroll in front? A window stays "focused" long after its
+// user walked away, so this also takes recent input: none for a while, or a locked screen,
+// means nobody is looking. What happens then isn't counted as seen, and their phone is told.
+const PRESENT_SECONDS = 90;
+function atComputer() {
+  if (!win || win.isDestroyed() || !win.isFocused()) return false;
+  try { return powerMonitor.getSystemIdleState(PRESENT_SECONDS) === 'active'; } catch (_) { return true; }
+}
+
 function isLookingAt(type, id) {
-  return win && win.isFocused() && focusView && focusView.type === type && focusView.id === id;
+  return atComputer() && focusView && focusView.type === type && focusView.id === id;
 }
 
 // The user has now seen what this session/run finished with: drop its "your turn" marker.
@@ -291,6 +318,7 @@ function publicConfig() {
     },
     updates: config.updates,
     trails: config.trails,
+    remote: { enabled: Boolean(config.remote?.enabled), relayUrl: config.remote?.relayUrl || '', notify: notifyMode(config.remote?.notify) },
     sidebar: config.sidebar,
     claudePath: config.claudePath,
     claudeMissing: !config.claudePath,
@@ -467,15 +495,20 @@ function buildMenu() {
   Menu.setApplicationMenu(Menu.buildFromTemplate(template));
 }
 
-// Every IPC call must come from Stroll's own page.
+// Every IPC call must come from Stroll's own page. The handlers are also kept by channel, for
+// paired phones: remote.js calls the ones a phone is allowed.
 const fromApp = e => e.senderFrame && e.senderFrame.url.split('#')[0] === INDEX_URL;
+const invokeHandlers = new Map();
+const sendHandlers = new Map();
 function handle(channel, fn) {
+  invokeHandlers.set(channel, fn);
   ipcMain.handle(channel, (e, ...args) => {
     if (!fromApp(e)) throw new Error('blocked');
     return fn(...args);
   });
 }
 function on(channel, fn) {
+  sendHandlers.set(channel, fn);
   ipcMain.on(channel, (e, ...args) => { if (fromApp(e)) fn(...args); });
 }
 
@@ -519,7 +552,7 @@ function registerIpc() {
   handle('session:setTrail', (id, trailId) => store.setSessionTrail(id, trailId || null));
 
   handle('session:create', opts => sessions.create(opts));
-  handle('session:buffer', id => sessions.buffer(id));
+  handle('session:buffer', (id, tail) => sessions.buffer(id, tail));
   handle('session:kill', id => sessions.kill(id));
   handle('session:forget', id => { sessions.kill(id); store.forgetSession(id); });
   handle('session:rename', (id, title) => store.patchSession(id, { title }));
@@ -593,9 +626,15 @@ function registerIpc() {
     config = Object.assign(config, mergeDeep(config, patch));
     sessions.config = config;
     runs.config = config;
+    if (patch && patch.remote) { remote.apply().catch(e => console.error('[stroll] phone access:', e.message)); updateAwake(); }
     send('config:changed', publicConfig());
     return publicConfig();
   });
+  handle('remote:get', () => remote.status());
+  handle('remote:pair', () => remote.startPairing());
+  handle('remote:cancelPair', () => remote.cancelPairing());
+  handle('remote:forget', id => remote.forget(id));
+  handle('remote:testPush', id => remote.testPush(id));
   handle('app:checkUpdates', async () => { await checkUpdates(); return updateInfo; });
   handle('app:whatsNew', all => whatsNew(Boolean(all)));
   handle('app:applyUpdate', () => applyUpdate());
@@ -645,8 +684,7 @@ async function boot() {
   runs = new Runs({ store, config, paths });
   approvals = new Approvals({ store, config });
   approvals.on('requested', (run, a) => {
-    if (isLookingAt('run', run.id)) return;
-    notify('A background run needs your OK', `${run.title}: ${a.detail.slice(0, 140)}`, { type: 'run', id: run.id }, { kind: 'needsYou' });
+    notify('A background run needs your OK', `${run.title}: ${a.detail.slice(0, 140)}`, { type: 'run', id: run.id }, { kind: 'needsYou', desktop: !isLookingAt('run', run.id) });
   });
   approvals.on('config', () => send('config:changed', publicConfig()));
   runs.deleteFiles(store.prune());
@@ -694,28 +732,37 @@ async function boot() {
   let pendingState = null;
   store.on('change', () => {
     updateBadge();
+    updateAwake();
     clearTimeout(pendingState);
     pendingState = setTimeout(() => send('state:changed', store.snapshot()), 30);
   });
   sessions.on('data', (id, seq, data) => send('session:data', id, seq, data));
   sessions.on('exit', id => send('session:exit', id));
+  sessions.on('size', (id, cols, rows) => send('session:size', id, cols, rows));
   sessions.on('failed', (id, message) => send('ui:error', message));
   sessions.on('attention', (id, message, kind) => {
-    if (isLookingAt('session', id)) { markSeen({ type: 'session', id }); return; }
+    const looking = isLookingAt('session', id);
+    if (looking) markSeen({ type: 'session', id });
     const s = store.session(id);
     if (s?.muted) return;
-    notify(s?.title || 'Claude session', message, { type: 'session', id }, { kind, key: kind === 'finishedTurns' ? `turn:${id}` : null });
+    notify(s?.title || 'Claude session', message, { type: 'session', id }, { kind, key: kind === 'finishedTurns' ? `turn:${id}` : null, desktop: !looking });
   });
   runs.on('event', (id, ev) => send('run:event', id, ev));
   runs.on('finished', id => {
     approvals.denyAllFor(id, 'The run ended.');
     const r = store.run(id);
-    if (!r || r.status === 'cancelled' || isLookingAt('run', id)) return;
-    store.patchRun(id, { unseen: true });
-    notify(r.status === 'ready' ? 'Background run ready' : `Background run ${r.status}`, r.title, { type: 'run', id }, { kind: 'backgroundRuns' });
+    if (!r || r.status === 'cancelled') return;
+    const looking = isLookingAt('run', id);
+    if (!looking) store.patchRun(id, { unseen: true });
+    notify(r.status === 'ready' ? 'Background run ready' : `Background run ${r.status}`, r.title, { type: 'run', id }, { kind: 'backgroundRuns', desktop: !looking });
   });
 
   registerIpc();
+  // Phone access: off until the user turns it on in Settings.
+  remote = new Remote({ file: paths.remote, config, api: { invoke: invokeHandlers, send: sendHandlers, seen: markSeen, version: app.getVersion() } });
+  remote.on('changed', status => send('remote:changed', status));
+  remote.on('paired', device => notify('Phone paired', `${device.name} can now reach Stroll on this computer.`, { type: 'settings' }, { phones: false }));
+  remote.apply().catch(e => console.error('[stroll] phone access:', e.message));
   buildMenu();
   createWindow();
   updateBadge();
@@ -756,6 +803,7 @@ if (!app.requestSingleInstanceLock()) {
     sessions?.stop();
     runs?.killAll();
     killCondenses();
+    remote?.stop();
     store?.flush();
     server?.stop();
   });

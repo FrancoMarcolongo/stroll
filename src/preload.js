@@ -9,11 +9,12 @@ const INVOKE = new Set([
   'workflow:render', 'workflow:fromSession', 'workflow:fromRun',
   'trail:add', 'trail:update', 'trail:delete', 'trail:suggestion', 'trail:condense', 'session:setTrail',
   'recent:list', 'dialog:pickDir', 'open:external', 'config:set', 'app:checkUpdates', 'app:applyUpdate', 'app:whatsNew',
+  'remote:get', 'remote:pair', 'remote:cancelPair', 'remote:forget', 'remote:testPush',
 ]);
 const SEND = new Set(['session:write', 'session:resize', 'session:interrupt', 'ui:focus']);
 const ON = new Set([
-  'state:changed', 'session:data', 'session:exit', 'run:event', 'ui:navigate', 'ui:command', 'ui:window-focus',
-  'ui:error', 'ui:update', 'config:changed',
+  'state:changed', 'session:data', 'session:exit', 'session:size', 'run:event', 'ui:navigate', 'ui:command', 'ui:window-focus',
+  'ui:error', 'ui:update', 'config:changed', 'remote:changed',
 ]);
 
 contextBridge.exposeInMainWorld('stroll', {

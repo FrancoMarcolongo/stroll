@@ -1,0 +1,19 @@
+name = "stroll-relay"
+# Pinned so a deploy can't land in another account the login happens to see.
+account_id = "0e677e5bad177d8f862af35ce48a124f"
+main = "src/index.js"
+compatibility_date = "2025-10-01"
+
+# The phone app (assembled from ../mobile by scripts/assemble.js). Anything that isn't one of
+# its files goes to the Worker.
+[assets]
+directory = "./public"
+
+[[durable_objects.bindings]]
+name = "ROOMS"
+class_name = "Room"
+
+# SQLite-backed objects are the kind the free plan allows. The relay stores nothing in them.
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["Room"]

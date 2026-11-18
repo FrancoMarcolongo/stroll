@@ -1,0 +1,17 @@
+{
+  "name": "stroll-relay",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Passes encrypted messages between Stroll on a computer and its paired phones.",
+  "type": "module",
+  "scripts": {
+    "assemble": "node scripts/assemble.js",
+    "predev": "node scripts/assemble.js",
+    "dev": "wrangler dev --port 8787",
+    "predeploy": "node scripts/assemble.js",
+    "deploy": "wrangler deploy"
+  },
+  "devDependencies": {
+    "wrangler": "^4.86.0"
+  }
+}

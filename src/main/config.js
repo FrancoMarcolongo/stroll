@@ -15,6 +15,7 @@ const paths = {
   hookSettings: path.join(DATA_DIR, 'hook-settings.json'),
   mcpConfig: path.join(DATA_DIR, 'mcp-config.json'),
   mcpConfigRuns: path.join(DATA_DIR, 'mcp-config-runs.json'),
+  remote: path.join(DATA_DIR, 'remote.json'),
   mcpServer: path.join(__dirname, '..', 'mcp', 'stroll-mcp.js'),
   appDir: path.join(__dirname, '..', '..'),
 };
@@ -47,6 +48,11 @@ const DEFAULT_CONFIG = {
   // Notes longer than this many words are long: the trail says so, and with autoCondense
   // Claude drafts a shorter version for the user to review.
   trails: { autoCondense: true, condenseAtWords: 800 },
+  // Phone access (remote.js). relayUrl: where paired phones find this computer (wss://…).
+  // appUrl: where the phone app is served, when that isn't the relay itself.
+  // notify: when paired phones are told about something: 'away' (not at Stroll on this
+  // computer), 'always' or 'never'.
+  remote: { enabled: false, relayUrl: 'wss://stroll-relay.francomarcolongo98.workers.dev', appUrl: '', notify: 'away' },
   // Sidebar sections, top to bottom, and which ones are collapsed.
   sidebar: { order: ['todos', 'trails', 'sessions', 'runs', 'workflows', 'recent'], collapsed: ['recent'], expanded: [] },
 };

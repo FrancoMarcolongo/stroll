@@ -2,6 +2,16 @@
 
 Stroll shows the new sections here once, after an update. **Settings › Updates › What's new** shows them all again.
 
+## 0.10.0 — 2026-11-18
+
+### Stroll on your phone
+- **Pair an Android phone and follow your work from anywhere.** Turn on **Settings › Phone access**, press **Pair a phone** and scan the code with the phone's camera. Nothing runs on the phone: it's remote access to this computer, which has to be on and awake.
+- **Sessions on the phone:** the live terminal, a row of keys for prompts (Esc, arrows, Enter) and a message box. You can start a new session from the phone too. The same session stays open on the computer, and a click in its window takes the terminal's size back.
+- **Answer what needs you:** read a run's report, allow or deny what it asks for, tick to-dos, start workflows.
+- **Notifications on the phone** when something needs you, by default only when you're not at Stroll on the computer. **Notify phones** in Settings changes that.
+- **Private:** the phone and the computer talk through a relay that can't read what it carries. Remove a phone in Settings and it's disconnected at once.
+- While phone access is on and something is working, Stroll keeps the computer from going to sleep on its own. Closing the lid still stops everything.
+
 ## 0.9.0 — 2026-11-18
 
 ### Workflows on trails
