@@ -99,6 +99,7 @@ const ICON = {
   mute: svgIcon('<path d="M13.73 21a2 2 0 01-3.46 0"/><path d="M18.63 13A17.9 17.9 0 0118 8"/><path d="M6.26 6.26A5.86 5.86 0 006 8c0 7-3 9-3 9h14"/><path d="M18 8a6 6 0 00-9.33-5"/><path d="M2 2l20 20"/>'),
   download: svgIcon('<path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><path d="M7 10l5 5 5-5"/><path d="M12 15V3"/>'),
   alert: svgIcon('<path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/><path d="M12 9v4M12 17h.01"/>'),
+  playClock: svgIcon('<circle cx="12" cy="12" r="9"/><path d="M10 8.5l5 3.5-5 3.5z"/>'),
   trail: svgIcon('<circle cx="6" cy="19.5" r="1.8"/><circle cx="6" cy="4.5" r="1.8"/><path d="M6 17.7c0-4.2 12-3.2 12-5.7S6 10.5 6 6.3"/>'),
   note: svgIcon('<path d="M4 20h4L19 9l-4-4L4 16z"/><path d="M13.5 6.5l4 4"/>'),
   archive: svgIcon('<rect x="3" y="4" width="18" height="5" rx="1.5"/><path d="M5 9v9a2 2 0 002 2h10a2 2 0 002-2V9"/><path d="M10 13h4"/>'),
@@ -249,6 +250,8 @@ function needsYou(d) {
     runs: d.runs.filter(r => ['idle', 'waiting'].includes(runDot(r))),
     reminders: d.todos.filter(t => t.status === 'open' && t.remindAt && !t.remindAck && new Date(t.remindAt) <= new Date()),
     workflows: (d.workflows || []).filter(w => w.due && !w.due.runId),
+    // To-dos whose scheduled start was missed (Stroll closed) or failed.
+    starts: d.todos.filter(t => t.status === 'open' && (t.startMissed || t.startError)),
   };
 }
 
@@ -272,7 +275,7 @@ function drawSidebar() {
   const open = d.todos.filter(t => t.status === 'open' && todoMatches(t)).sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
   const done = d.todos.filter(t => t.status === 'done' && todoMatches(t)).sort((a, b) => (b.doneAt || '').localeCompare(a.doneAt || ''));
   const n = needsYou(d);
-  $('#nav-needs').textContent = (n.waiting.length + n.yourTurn.length + n.runs.length + n.reminders.length + n.workflows.length) || '';
+  $('#nav-needs').textContent = (n.waiting.length + n.yourTurn.length + n.runs.length + n.reminders.length + n.workflows.length + n.starts.length) || '';
   $('#home-btn').classList.toggle('active', S.view.type === 'home');
   $('#settings-btn').classList.toggle('active', S.view.type === 'settings');
   $('#todo-count').textContent = open.length || '';
@@ -326,7 +329,7 @@ function drawSidebar() {
   patchList($('#recent-list'), recent.length ? recent.map(recentRow).join('') : q ? '' : `<li class="empty">${S.recentLoaded ? 'Nothing recent.' : 'Loading…'}</li>`);
 
   const attention = {
-    todos: n.reminders.length, sessions: n.waiting.length + n.yourTurn.length, runs: n.runs.length, workflows: n.workflows.length,
+    todos: n.reminders.length + n.starts.length, sessions: n.waiting.length + n.yourTurn.length, runs: n.runs.length, workflows: n.workflows.length,
     trails: activeAll.filter(t => ['waiting', 'idle'].includes(trailDot(t))).length,
   };
   for (const [key, count] of Object.entries(attention)) document.querySelector(`section[data-section="${key}"]`)?.toggleAttribute('data-alert', count > 0);
@@ -428,6 +431,8 @@ function trailOptions(selected) {
 // session's state, "Needs you" when one is waiting), then background runs, else nothing.
 function todoState(t) {
   if (t.status !== 'open') return null;
+  if (t.startError) return { tone: 'waiting', label: "Didn't start", title: t.startError };
+  if (t.startMissed) return { tone: 'waiting', label: 'Missed start', title: `It was set to start ${new Date(t.startMissed).toLocaleString()}, while Stroll was closed` };
   const live = t.sessionIds.map(session).filter(s => s && s.live);
   if (live.length) {
     const dots = live.map(sessionDot);
@@ -463,10 +468,12 @@ function todoRow(t) {
   const work = done ? null : activeWork(t);
   const reminder = t.remindAt && !t.remindedAt && !done
     ? `<span class="reminder" title="Reminder ${esc(new Date(t.remindAt).toLocaleString())}">${ICON.clock}</span>` : '';
+  const starts = t.startAt && !done
+    ? `<span class="reminder starts" title="Starts ${esc(slotText(t.startAt))}: ${t.startMode === 'run' ? 'hands off to a background run' : 'opens a session'}">${ICON.playClock}</span>` : '';
   return `<li class="row ${isActive ? 'active' : ''} ${S.selected.has(t.id) ? 'selected' : ''}" data-kind="todo" data-id="${esc(t.id)}">
     <button class="check ${done ? 'done' : ''}" data-act="toggle" title="${done ? 'Reopen' : 'Mark done'}">${ICON.check}</button>
     <div class="main"><div class="title">${hl(t.title)}</div>${snippet([t.title], t.notes, shortDir(t.cwd))}</div>
-    <span class="meta">${pillHtml(todoState(t))}${reminder}</span>
+    <span class="meta">${pillHtml(todoState(t))}${starts}${reminder}</span>
     ${done ? '' : `<span class="row-actions">${work ? `<button class="icon-btn" data-act="goto-work" title="Go to its ${work.type === 'session' ? 'session' : 'background run'}">${workIcon(work)}</button>` : ''}<button class="icon-btn" data-act="start" title="${work ? 'Start another session' : 'Start a session'}">${ICON.play}</button><button class="icon-btn" data-act="handoff" title="Hand off to a background run">${ICON.handoff}</button></span>`}
   </li>`;
 }
@@ -820,6 +827,7 @@ function renderTodo(header, panel) {
     <button class="check ${done ? 'done' : ''}" data-act="toggle-current" title="${done ? 'Reopen' : 'Mark done'}">${ICON.check}</button>
     <span class="h-title">${esc(t.title)}</span>
     <span id="todo-pill">${pillHtml(todoState(t))}</span>
+    <span id="todo-starts-pill"></span>
     <span class="h-meta">added ${agoText(t.createdAt)}${done ? ` · done ${agoText(t.doneAt)}` : ''}</span>
     <span id="todo-trail-chip">${trailChip(t.trailId)}</span>
     <span class="spacer"></span>
@@ -831,6 +839,18 @@ function renderTodo(header, panel) {
     <div class="field"><label>Title</label><input type="text" id="todo-title" value="${esc(t.title)}"></div>
     <div class="field"><label>Notes</label><textarea id="todo-notes" placeholder="Context, links, what done looks like… Type @ to reference a file.">${esc(t.notes)}</textarea>
       <p class="help">Claude gets these with the to-do. Files referenced with <code>@</code> are listed for it to read.</p></div>
+    ${done ? '' : `<section class="set-group todo-first"><h3>${ICON.play}First message</h3>
+      <div class="field"><textarea id="todo-first" placeholder="What to ask Claude when this starts. Optional: empty opens the session for you to type. Type @ to reference a file.">${esc(t.firstMessage || '')}</textarea></div>
+      <div class="field"><label>Start it automatically</label>
+        <div class="inline"><input type="datetime-local" id="todo-start-at" value="${toLocalInput(t.startAt)}">
+          <button class="btn" data-start-at="60">In 1h</button><button class="btn" data-start-at="tomorrow">Tomorrow 9:00</button><button class="btn ghost" data-start-at="clear">Clear</button></div></div>
+      <div class="field"><label>As</label><select id="todo-start-mode">
+        <option value="session" ${t.startMode !== 'run' ? 'selected' : ''}>A session, with the first message typed for you</option>
+        <option value="run" ${t.startMode === 'run' ? 'selected' : ''}>A background run, with the first message as its instructions</option></select></div>
+      <div id="todo-start-allow" ${t.startMode === 'run' ? '' : 'hidden'}>${toggle('todo-start-allow-all', t.startAllowAll, 'Allow everything it asks for', ALLOW_ALL_HELP)}</div>
+      <p class="help" id="todo-start-help"></p>
+      <div id="todo-start-due"></div>
+    </section>`}
     <div class="field"><label>Reminder</label><div class="inline"><input type="datetime-local" id="todo-remind" value="${toLocalInput(t.remindAt)}">
       <button class="btn" data-remind="60">In 1h</button><button class="btn" data-remind="tomorrow">Tomorrow 9:00</button><button class="btn ghost" data-remind="clear">Clear</button></div></div>
     <div class="field"><label>Working directory</label><div class="inline"><input type="text" id="todo-cwd" value="${esc(t.cwd || '')}" placeholder="${esc(trail(t.trailId)?.cwd || S.data.config.defaultCwd)}"><button class="btn" data-act="pick-todo-cwd">Browse…</button></div></div>
@@ -840,12 +860,14 @@ function renderTodo(header, panel) {
   </div>`;
 
   const save = patch => api.invoke('todo:update', t.id, patch);
+  const saveStart = patch => api.invoke('todo:setStart', t.id, patch).catch(flashError);
   const cwd = () => $('#todo-cwd')?.value.trim() || trail(todo(t.id)?.trailId)?.cwd || S.data.config.defaultCwd;
   const notesEd = MdEditor.attach($('#todo-notes'), { cwd, rows: 6 });
+  const firstEd = $('#todo-first') && MdEditor.attach($('#todo-first'), { cwd, rows: 4 });
   renderTodoLinks();
   $('#todo-title').addEventListener('change', e => { const v = e.target.value.trim(); if (v) save({ title: v }); });
   $('#todo-notes').addEventListener('change', e => save({ notes: e.target.value }));
-  $('#todo-cwd').addEventListener('change', e => { save({ cwd: e.target.value.trim() || null }); notesEd.refresh(); });
+  $('#todo-cwd').addEventListener('change', e => { save({ cwd: e.target.value.trim() || null }); notesEd.refresh(); firstEd?.refresh(); });
   $('#todo-remind').addEventListener('change', e => save({ remindAt: e.target.value ? new Date(e.target.value).toISOString() : null }));
   $('#todo-trail').addEventListener('change', async e => {
     if (e.target.value !== '__new') return save({ trailId: e.target.value || null });
@@ -855,6 +877,33 @@ function renderTodo(header, panel) {
     renderTodoLinks();
     return flash(`Started the trail “${tr.title}”. Open it to write its notes.`, { type: 'trail', id: tr.id }, { ms: 6000 });
   });
+  if (!firstEd) return;
+  $('#todo-first').addEventListener('change', e => saveStart({ firstMessage: e.target.value }));
+  $('#todo-start-at').addEventListener('change', e => saveStart({ startAt: e.target.value ? new Date(e.target.value).toISOString() : null }));
+  $('#todo-start-mode').addEventListener('change', e => { $('#todo-start-allow').hidden = e.target.value !== 'run'; saveStart({ startMode: e.target.value }); });
+  $('#todo-start-allow-all').addEventListener('change', e => saveStart({ startAllowAll: e.target.checked }));
+}
+
+// The scheduled start's state in the to-do view: when it fires, or that it was missed.
+function renderTodoStart(t) {
+  const help = $('#todo-start-help');
+  const pill = $('#todo-starts-pill');
+  if (pill) {
+    const markup = t.startAt && t.status === 'open' ? `<span class="pill active" title="${t.startMode === 'run' ? 'Hands off to a background run' : 'Opens a session'}"><i></i>Starts ${esc(slotText(t.startAt))}</span>` : '';
+    if (pill.innerHTML !== markup) pill.innerHTML = markup;
+  }
+  if (!help) return;
+  const startInput = $('#todo-start-at');
+  if (startInput && document.activeElement !== startInput && startInput.value !== toLocalInput(t.startAt)) startInput.value = toLocalInput(t.startAt);
+  help.textContent = t.startAt
+    ? `Starts ${slotText(t.startAt)}${t.firstMessage?.trim() ? '' : ', with no first message'}. It fires only while Stroll is open; a time missed while it was closed shows up as missed, it doesn't run late.`
+    : 'Pick a time to have Stroll start it for you, with the first message above.';
+  const box = $('#todo-start-due');
+  const markup = !(t.startMissed || t.startError) ? '' : `<div class="approval">
+    <div class="ap-head">${ICON.bell}<b>${t.startError ? "It couldn't start" : 'Missed while Stroll was closed'}</b><span class="h-meta">set for ${esc(slotText(t.startMissed))}</span></div>
+    ${t.startError ? `<p class="help">${esc(t.startError)}</p>` : ''}
+    <div class="actions"><button class="btn primary" data-act="todo-start-now">${ICON.play}Start now</button><button class="btn ghost" data-act="todo-start-dismiss">Dismiss</button></div></div>`;
+  if (box.dataset.markup !== markup) { box.innerHTML = markup; box.dataset.markup = markup; }
 }
 
 // With work already going, "Go to" leads and starting another session is the secondary choice.
@@ -872,6 +921,7 @@ function renderTodoLinks() {
   const pill = $('#todo-pill');
   const pillMarkup = pillHtml(todoState(t));
   if (pill && pill.innerHTML !== pillMarkup) pill.innerHTML = pillMarkup;
+  renderTodoStart(t);
   const start = $('#todo-start');
   const startMarkup = start && todoStartButtons(t);
   if (start && start.dataset.markup !== startMarkup) { start.innerHTML = startMarkup; start.dataset.markup = startMarkup; }
@@ -1080,6 +1130,7 @@ function renderHome(header, panel) {
     ...n.waiting.map(sessionRow),
     ...n.runs.map(runRow),
     ...n.reminders.map(todoRow),
+    ...n.starts.map(todoRow),
     ...n.workflows.map(workflowRow),
     ...n.yourTurn.map(sessionRow),
   ];
@@ -1173,7 +1224,7 @@ function startModal(todoIds = [], { trailId } = {}) {
     <div class="field"><label>Name</label><input type="text" name="title" value="${esc(title)}" placeholder="Optional"></div>
     ${trailField(selected)}
     ${dirField(cwd)}
-    <div class="field"><label>First message</label><textarea name="first" placeholder="Optional. Leave empty to start typing in the session. Type @ to reference a file."></textarea></div>
+    <div class="field"><label>First message</label><textarea name="first" placeholder="Optional. Leave empty to start typing in the session. Type @ to reference a file.">${esc(todos.length === 1 ? todos[0].firstMessage || '' : '')}</textarea></div>
     <footer><button class="btn ghost" data-close>Cancel</button><button class="btn primary" data-go>${ICON.play}Start <kbd>${SUBMIT_KEY}</kbd></button></footer>
   `, (m, close) => {
     const cwdInput = wireDirField(m);
@@ -1198,7 +1249,9 @@ function startModal(todoIds = [], { trailId } = {}) {
     m.querySelector('[data-go]').addEventListener('click', go);
     m.querySelector('[data-close]').addEventListener('click', close);
     m.addEventListener('keydown', e => { if (e.key === 'Enter' && cmdKey(e)) go(); if (e.key === 'Escape') close(); });
-    m.querySelector(todos.length ? '[name=first]' : '[name=title]').focus();
+    const focusEl = m.querySelector(todos.length ? '[name=first]' : '[name=title]');
+    focusEl.focus();
+    focusEl.setSelectionRange(focusEl.value.length, focusEl.value.length);
   });
 }
 
@@ -1211,7 +1264,7 @@ function handoffModal(todoIds, { trailId } = {}) {
   modal(`
     <h2>Hand off to a background run</h2>
     <div class="sub">${forTrail ? `For the trail “${esc(tr.title)}”; it gets the trail’s notes.` : `${todos.map(t => esc(t.title)).join(' · ')}${tr ? `<br>On the trail “${esc(tr.title)}”; it gets the trail’s notes too.` : ''}`}<br>It investigates and drafts, never edits, pushes or sends, and asks you before anything else. You'll get a notification when it's ready or needs you.</div>
-    <div class="field"><label>${forTrail ? 'What should it do?' : 'Instructions'}</label><textarea name="instructions" placeholder="${forTrail ? 'What to investigate or draft.' : 'Optional. What should it look at, what should the draft be?'} Type @ to reference a file."></textarea></div>
+    <div class="field"><label>${forTrail ? 'What should it do?' : 'Instructions'}</label><textarea name="instructions" placeholder="${forTrail ? 'What to investigate or draft.' : 'Optional. What should it look at, what should the draft be?'} Type @ to reference a file.">${esc(todos.length === 1 ? todos[0].firstMessage || '' : '')}</textarea></div>
     ${dirField(cwd)}
     ${toggle('handoff-allow-all', false, 'Allow everything it asks for', ALLOW_ALL_HELP)}
     <footer><button class="btn ghost" data-close>Cancel</button><button class="btn primary" data-go>${ICON.handoff}Hand off <kbd>${SUBMIT_KEY}</kbd></button></footer>
@@ -1437,6 +1490,17 @@ document.addEventListener('click', async e => {
         return undefined;
       }
       case 'link-todo': return linkTodoModal(S.view.id);
+      case 'todo-start-now': {
+        const first = $('#todo-first');
+        try {
+          // Unsaved edits to the first message count.
+          if (first) await api.invoke('todo:setStart', S.view.id, { firstMessage: first.value });
+          const view = await api.invoke('todo:startNow', S.view.id);
+          if (view.type === 'session' && terms.has(view.id)) resetTerm(view.id);
+          return navigate(view);
+        } catch (err) { return flashError(err); }
+      }
+      case 'todo-start-dismiss': return api.invoke('todo:setStart', S.view.id, { dismissMissed: true });
       case 'session-trail': return trailPickModal(S.view.id);
       case 'trail-start': return startModal([], { trailId: id });
       case 'trail-start-current': return startModal([], { trailId: S.view.id });
@@ -1614,6 +1678,17 @@ document.addEventListener('click', e => {
   if (kind === 'tomorrow') { at = new Date(); at.setDate(at.getDate() + 1); at.setHours(9, 0, 0, 0); }
   api.invoke('todo:update', S.view.id, { remindAt: at ? at.toISOString() : null });
   $('#todo-remind').value = at ? toLocalInput(at.toISOString()) : '';
+});
+document.addEventListener('click', e => {
+  const btn = e.target.closest('[data-start-at]');
+  if (!btn || S.view.type !== 'todo') return;
+  const kind = btn.dataset.startAt;
+  let at = null;
+  if (kind === '60') at = new Date(Date.now() + 60 * 60 * 1000);
+  if (kind === 'tomorrow') { at = new Date(); at.setDate(at.getDate() + 1); at.setHours(9, 0, 0, 0); }
+  const first = $('#todo-first');
+  api.invoke('todo:setStart', S.view.id, { startAt: at ? at.toISOString() : null, ...(first ? { firstMessage: first.value } : {}) }).catch(flashError);
+  $('#todo-start-at').value = at ? toLocalInput(at.toISOString()) : '';
 });
 
 // Right-click on a session or background run: mark it read (hide its dot) or unread (show it).
@@ -1993,6 +2068,7 @@ function nextNeedingYou() {
     ...n.yourTurn.map(s => ({ type: 'session', id: s.id })),
     ...n.runs.map(r => ({ type: 'run', id: r.id })),
     ...n.reminders.map(t => ({ type: 'todo', id: t.id })),
+    ...n.starts.map(t => ({ type: 'todo', id: t.id })),
     ...n.workflows.map(w => ({ type: 'workflow', id: w.id })),
   ];
   if (!list.length) return flash('Nothing needs you right now');

@@ -1,7 +1,7 @@
 const { contextBridge, ipcRenderer, webUtils } = require('electron');
 
 const INVOKE = new Set([
-  'state:get', 'todo:add', 'todo:update', 'todo:delete', 'todo:handoff',
+  'state:get', 'todo:add', 'todo:update', 'todo:delete', 'todo:handoff', 'todo:setStart', 'todo:startNow',
   'fs:complete', 'fs:peek', 'fs:refs', 'fs:display', 'dialog:pickFiles',
   'session:create', 'session:buffer', 'session:kill', 'session:forget', 'session:rename', 'session:link',
   'session:clearRestorable', 'session:markRead', 'session:mute', 'sessions:clearClosed',

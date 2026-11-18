@@ -128,7 +128,8 @@ function updateBadge() {
   const ready = s.runs.filter(r => (r.unseen && r.status !== 'running') || r.pendingApproval).length;
   // A prepared workflow counts through its run.
   const due = s.workflows.filter(w => w.due && !w.due.runId).length;
-  const total = waiting + ready + due;
+  const missedStarts = s.todos.filter(t => t.status === 'open' && (t.startMissed || t.startError)).length;
+  const total = waiting + ready + due + missedStarts;
   app.dock?.setBadge(total ? String(total) : '');
 }
 
@@ -150,6 +151,59 @@ function startHandoff(todoIds, { instructions = '', prompt = null, cwd = null, t
     allowAll,
     trailId: trail?.id || null,
   });
+}
+
+// ---------- to-dos that start on their own ----------
+const START_MODES = ['session', 'run'];
+
+// Only fields that make sense, from the to-do view.
+function cleanTodoStart(patch = {}) {
+  const out = {};
+  if ('firstMessage' in patch) out.firstMessage = String(patch.firstMessage || '');
+  if ('startAt' in patch) {
+    const ms = Date.parse(patch.startAt);
+    out.startAt = patch.startAt && Number.isFinite(ms) ? new Date(ms).toISOString() : null;
+  }
+  if ('startMode' in patch) out.startMode = START_MODES.includes(patch.startMode) ? patch.startMode : 'session';
+  if ('startAllowAll' in patch) out.startAllowAll = Boolean(patch.startAllowAll);
+  if (patch.dismissMissed) { out.startMissed = null; out.startError = null; }
+  return out;
+}
+
+// Starts a to-do with its first message: a session, or a hand-off when it's set to run in
+// the background. Clears its schedule. Both take the to-do's trail, as Start and Hand off do.
+function startTodo(id) {
+  const t = store.todo(id);
+  if (!t) throw new Error('That to-do no longer exists.');
+  const message = (t.firstMessage || '').trim();
+  const cwd = t.cwd || store.trail(t.trailId)?.cwd || store.state.recentDirs[0] || config.defaultCwd;
+  store.setTodoStart(id, { startAt: null, startMissed: null, startError: null });
+  if (t.startMode === 'run') return { type: 'run', id: startHandoff([id], { instructions: message, cwd, allowAll: t.startAllowAll }) };
+  return { type: 'session', id: sessions.create({ cwd, title: t.title, todoIds: [id], firstMessage: message || null }) };
+}
+
+// Same rule as workflows: a start missed while Stroll was closed is reported, never run late.
+function checkTodoStarts() {
+  const nowMs = Date.now();
+  for (const t of store.state.todos) {
+    if (t.status !== 'open' || !t.startAt) continue;
+    const atMs = Date.parse(t.startAt);
+    if (!(atMs <= nowMs)) continue;
+    const at = t.startAt;
+    const view = { type: 'todo', id: t.id };
+    if (nowMs - atMs > WORKFLOW_GRACE_MS) {
+      store.setTodoStart(t.id, { startAt: null, startMissed: at });
+      notify(`Missed: ${t.title}`, `It was set to start ${slotLabel(at)}, while Stroll was closed.`, view);
+      continue;
+    }
+    try {
+      const started = startTodo(t.id);
+      notify(`Started: ${t.title}`, started.type === 'run' ? 'Handed off to a background run.' : 'Its session is open.', started);
+    } catch (e) {
+      store.setTodoStart(t.id, { startAt: null, startMissed: at, startError: e.message });
+      notify(`${t.title} couldn't start`, e.message, view);
+    }
+  }
 }
 
 // What a session sees of its trail through the MCP tools: the notes now, and the trail's work.
@@ -542,6 +596,8 @@ function registerIpc() {
   handle('todo:update', (id, patch) => store.updateTodo(id, patch));
   handle('todo:delete', id => store.deleteTodo(id));
   handle('todo:handoff', (todoIds, opts) => startHandoff(todoIds, opts));
+  handle('todo:setStart', (id, patch) => store.setTodoStart(id, cleanTodoStart(patch)));
+  handle('todo:startNow', id => startTodo(id));
 
   handle('fs:complete', (cwd, query) => files.complete(cwd, query));
   handle('fs:peek', (cwd, p) => files.peek(cwd, p));
@@ -799,8 +855,8 @@ async function boot() {
   createWindow();
   updateBadge();
   importWorkflows();
-  setInterval(() => { checkReminders(); checkWorkflows(); }, 30 * 1000);
-  setTimeout(() => { checkReminders(); checkWorkflows(); }, 3000);
+  setInterval(() => { checkReminders(); checkWorkflows(); checkTodoStarts(); }, 30 * 1000);
+  setTimeout(() => { checkReminders(); checkWorkflows(); checkTodoStarts(); }, 3000);
   setTimeout(checkUpdates, 15 * 1000);
   setInterval(checkUpdates, 6 * 60 * 60 * 1000);
 }
