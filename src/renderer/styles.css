@@ -315,7 +315,6 @@ details[open] > summary::before { transform: rotate(90deg); }
 
 /* ---------- workflows ---------- */
 .wf-preview { margin: 0; font-family: var(--mono); font-size: 12px; background: var(--bg-input); border: 1px solid var(--line); border-radius: var(--radius); padding: 9px 11px; white-space: pre-wrap; word-break: break-word; color: var(--text); min-height: 36px; }
-.wf-view .set-group .field textarea { min-height: 0; font-family: var(--mono); font-size: 12px; }
 .day-picks { display: flex; gap: 6px; flex-wrap: wrap; }
 .chip.day { padding: 3px 11px; font-size: 12px; }
 .chip.day.on { background: var(--accent-soft); border-color: var(--accent); color: var(--text); }
@@ -399,3 +398,77 @@ mark { background: rgba(217, 162, 107, 0.28); color: var(--text); border-radius:
 .row .sub.snippet { color: var(--text-2); }
 .row.kbd { background: var(--bg-hover); box-shadow: inset 0 0 0 1px var(--accent); }
 #search-empty { padding: 10px 16px; }
+
+/* ---------- markdown editor (mdeditor.js) ---------- */
+/* The textarea (transparent text) sits on the highlight layer; both must share every metric. */
+.mde { background: var(--bg-input); border: 1px solid var(--line); border-radius: var(--radius); transition: border-color 0.12s, box-shadow 0.12s; }
+.mde:focus-within { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.mde.drop { border-color: var(--blue); box-shadow: 0 0 0 3px var(--blue-soft); }
+.mde-bar { display: flex; align-items: center; gap: 2px; padding: 4px 6px; border-bottom: 1px solid var(--line-soft); flex-wrap: wrap; }
+.mde-tool { display: inline-flex; align-items: center; gap: 5px; height: 24px; min-width: 26px; justify-content: center; padding: 0 6px; border: 1px solid transparent; border-radius: 6px; background: transparent; color: var(--text-3); font: 600 12.5px/1 var(--font); }
+.mde-tool:hover { background: var(--bg-hover); color: var(--text); border-color: var(--line); }
+.mde-tool.ref b { color: var(--green); font-size: 13.5px; }
+.mde-tool.structure { margin-left: 2px; font-weight: 550; font-size: 12px; }
+.mde-tool svg { width: 14px; height: 14px; }
+.mde-sep { width: 1px; height: 14px; background: var(--line); margin: 0 4px; }
+.mde-hint { margin-left: auto; color: var(--text-3); font-size: 11px; padding-right: 4px; white-space: nowrap; }
+.mde-hint b { color: var(--green); }
+.mde-body { position: relative; }
+.mde .mde-hl, .mde .mde-body > textarea.mde-input {
+  margin: 0; padding: 10px 12px; border: 1px solid transparent; border-radius: 0 0 var(--radius) var(--radius);
+  font: 12.5px/1.6 var(--mono); letter-spacing: 0; tab-size: 4;
+  white-space: pre-wrap; overflow-wrap: break-word; word-break: normal;
+}
+.mde .mde-hl { position: absolute; inset: 0; overflow: hidden; pointer-events: none; color: var(--text); }
+.mde .mde-body > textarea.mde-input, .mde .mde-body > textarea.mde-input:focus {
+  position: relative; display: block; width: 100%; resize: none; overflow: hidden; outline: none; box-shadow: none;
+  background: transparent; color: transparent; caret-color: var(--text);
+  min-height: calc(var(--rows, 4) * 1.6em + 22px);
+}
+.mde textarea.mde-input::placeholder { color: var(--text-3); }
+.mde textarea.mde-input::selection { background: rgba(88, 166, 255, 0.32); color: transparent; }
+.modal { max-height: 84vh; overflow-y: auto; }
+
+/* highlight classes, also used read-only (MdEditor.render) */
+.md-mk { color: var(--text-3); font-weight: 400; font-style: normal; }
+.md-h { color: var(--accent-2); font-weight: 700; }
+.md-b { color: #fff; font-weight: 700; }
+.md-i { color: var(--text); font-style: italic; }
+.md-code { color: #ffa198; background: rgba(110, 118, 129, 0.18); border-radius: 3px; }
+.md-fence { color: var(--text-3); }
+.md-cb { color: #a5d6ff; }
+.md-li { color: var(--accent); font-weight: 700; }
+.md-box { color: var(--blue); }
+.md-done { color: var(--text-3); text-decoration: line-through; }
+.md-q { color: var(--text-2); font-style: italic; }
+.md-link { color: var(--blue); text-decoration: underline; text-decoration-color: rgba(88, 166, 255, 0.4); }
+.md-blank { color: #d2a8ff; background: rgba(188, 140, 255, 0.14); border-radius: 3px; }
+.md-ref { color: var(--text-2); border-radius: 3px; }
+.md-ref.file, .md-ref.dir { color: #7ee787; background: var(--green-soft); }
+.md-ref.dir { color: #8cc2ff; background: var(--blue-soft); }
+.md-ref.missing { color: #ff8a83; text-decoration: underline wavy rgba(248, 81, 73, 0.6); }
+.md-view { white-space: pre-wrap; overflow-wrap: break-word; font: 12px/1.6 var(--mono); color: var(--text); }
+.wf-preview .md-mk { color: var(--text-3); }
+
+/* the shared popup: @ completion with a preview, or the structure menu */
+.mde-pop { position: fixed; z-index: 90; background: var(--bg-raised); border: 1px solid var(--line); border-radius: 10px; box-shadow: var(--shadow); overflow: hidden; animation: rise 0.1s ease-out; }
+.mde-pop.refs { width: min(620px, calc(100vw - 16px)); }
+.mde-pop.menu { width: 280px; padding: 4px; }
+.mde-cols { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.1fr); height: 260px; overflow: hidden; }
+.mde-cols:has(> .mde-list:only-child) { height: auto; max-height: 260px; }
+.mde-list { overflow-y: auto; padding: 4px; max-height: 260px; }
+.mde-item { display: flex; align-items: center; gap: 7px; padding: 5px 8px; border-radius: 6px; cursor: pointer; font-size: 12.5px; min-width: 0; }
+.mde-item.on { background: var(--bg-active); }
+.mde-item .ic { color: var(--text-3); display: grid; flex: none; }
+.mde-item .ic.dir { color: var(--blue); }
+.mde-item .nm { white-space: nowrap; flex: none; max-width: 70%; overflow: hidden; text-overflow: ellipsis; }
+.mde-item .pt { color: var(--text-3); font-size: 11.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; direction: rtl; text-align: left; flex: 1; min-width: 0; }
+.mde-pop.menu .mde-item { display: grid; gap: 1px; }
+.mde-pop.menu .mde-item small { color: var(--text-3); font-size: 11.5px; }
+.mde-none { padding: 10px; color: var(--text-3); font-size: 12px; }
+.mde-peek { border-left: 1px solid var(--line-soft); background: var(--bg-side); overflow: hidden; display: flex; flex-direction: column; min-width: 0; }
+.mde-peek .pk-head { padding: 7px 10px 2px; font-size: 11.5px; color: var(--text-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; direction: rtl; text-align: left; }
+.mde-peek .pk-meta { padding: 0 10px 5px; font-size: 11px; color: var(--text-3); border-bottom: 1px solid var(--line-soft); }
+.mde-peek pre { margin: 0; padding: 7px 10px; font: 11px/1.5 var(--mono); color: var(--text-2); white-space: pre; overflow: hidden; flex: 1; }
+.mde-foot { display: flex; justify-content: space-between; align-items: center; padding: 5px 10px; border-top: 1px solid var(--line-soft); color: var(--text-3); font-size: 11px; }
+.mde-foot .link-btn { text-transform: none; letter-spacing: 0; font-size: 11.5px; }

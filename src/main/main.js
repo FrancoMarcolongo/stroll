@@ -24,6 +24,7 @@ const { Server, writeHookSettings, writeMcpConfig } = require('./server');
 const { recentSessions, firstPrompt } = require('./recent');
 const { parseFields, renderTemplate, dueSlot, nextSlot, validSchedule } = require('./workflows');
 const { parseChangelog, cmpVersion, unseenSections } = require('./changelog');
+const files = require('./files');
 
 const CHANGELOG_PATH = path.join(__dirname, '..', '..', 'CHANGELOG.md');
 
@@ -42,16 +43,20 @@ const shownNotifications = new Set(); // macOS drops click events of notificatio
 const lastNotified = new Map();
 
 
-const handoffPrompt = (todos, instructions, cwd, trail = null) => [
-  todos.length === 1 ? `Work on this to-do from the user's list: ${todos[0].title}`
-    : todos.length ? "Work on these to-dos from the user's list:" : `Work on this, for the user's trail "${trail?.title}".`,
-  ...(todos.length > 1 ? todos.map(t => `- ${t.title}`) : []),
-  ...todos.filter(t => t.notes).map(t => `Notes on "${t.title}": ${t.notes}`),
-  trail ? `\nThis is part of the trail "${trail.title}". Its notes, the context the user keeps for this work:\n${trail.notes.trim() || '(empty)'}` : '',
-  instructions ? `\nInstructions: ${instructions}` : '',
-  `\nWorking folder: ${cwd}`,
-  '\nInvestigate, gather the context needed and prepare drafts so the user can finish this quickly.',
-].filter(Boolean).join('\n');
+function handoffPrompt(todos, instructions, cwd, trail = null) {
+  const refs = files.refsNote([...todos.map(t => t.notes), trail?.notes, instructions].join('\n'), cwd);
+  return [
+    todos.length === 1 ? `Work on this to-do from the user's list: ${todos[0].title}`
+      : todos.length ? "Work on these to-dos from the user's list:" : `Work on this, for the user's trail "${trail?.title}".`,
+    ...(todos.length > 1 ? todos.map(t => `- ${t.title}`) : []),
+    ...todos.filter(t => t.notes).map(t => `Notes on "${t.title}": ${t.notes}`),
+    trail ? `\nThis is part of the trail "${trail.title}". Its notes, the context the user keeps for this work:\n${trail.notes.trim() || '(empty)'}` : '',
+    instructions ? `\nInstructions: ${instructions}` : '',
+    `\nWorking folder: ${cwd}`,
+    refs ? `\n${refs}` : '',
+    '\nInvestigate, gather the context needed and prepare drafts so the user can finish this quickly.',
+  ].filter(Boolean).join('\n');
+}
 
 // To the window, and to the paired phones that are connected (remote.js picks what they get).
 function send(channel, ...args) {
@@ -521,6 +526,11 @@ function registerIpc() {
   handle('todo:delete', id => store.deleteTodo(id));
   handle('todo:handoff', (todoIds, opts) => startHandoff(todoIds, opts));
 
+  handle('fs:complete', (cwd, query) => files.complete(cwd, query));
+  handle('fs:peek', (cwd, p) => files.peek(cwd, p));
+  handle('fs:refs', (cwd, refs) => files.refKinds(cwd, refs));
+  handle('fs:display', (cwd, list) => (list || []).map(p => files.displayPath(cwd, p)));
+
   // A trail made from a session, a to-do or a workflow takes it in.
   handle('trail:add', ({ title, notes, cwd, sessionId, todoId, workflowId } = {}) => {
     const t = store.addTrail({ title, notes, cwd });
@@ -643,6 +653,10 @@ function registerIpc() {
   handle('dialog:pickDir', async start => {
     const r = await dialog.showOpenDialog(win, { properties: ['openDirectory'], defaultPath: start || config.defaultCwd });
     return r.canceled ? null : r.filePaths[0];
+  });
+  handle('dialog:pickFiles', async start => {
+    const r = await dialog.showOpenDialog(win, { properties: ['openFile', 'multiSelections'], defaultPath: start || config.defaultCwd });
+    return r.canceled ? [] : r.filePaths;
   });
   handle('open:external', url => openLink(url));
   on('ui:focus', view => { focusView = view; if (win?.isFocused()) markSeen(view); });
