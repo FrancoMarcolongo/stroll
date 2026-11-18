@@ -44,6 +44,9 @@ const DEFAULT_CONFIG = {
     extraDisallowedTools: [],
   },
   updates: { check: true },
+  // Notes longer than this many words are long: the trail says so, and with autoCondense
+  // Claude drafts a shorter version for the user to review.
+  trails: { autoCondense: true, condenseAtWords: 800 },
   // Sidebar sections, top to bottom, and which ones are collapsed.
   sidebar: { order: ['todos', 'trails', 'sessions', 'runs', 'workflows', 'recent'], collapsed: ['recent'], expanded: [] },
 };

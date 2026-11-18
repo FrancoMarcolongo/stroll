@@ -62,6 +62,8 @@ On Linux, plain Ctrl keys (Ctrl+K, Ctrl+J, Ctrl+R, Ctrl+V…) go to Claude Code,
 - **Inside a session started from Stroll,** Claude can manage your list: "add a to-do to …", "hand this off", "what's on my list?". That's the `stroll` MCP server.
 - **Trails:** **+** in the Trails section starts one; write what every session on it should know in its notes (the goal, the repos, the ticket, decisions, gotchas). **New session** on the trail starts Claude with those notes; a resumed session gets them as they are now. Put an existing session on a trail with **Add to trail** in its header or by right-clicking it, and a to-do with its **Trail** field: sessions and hand-offs started from that to-do get the trail's notes too.
   - **The notes grow as you work.** When Claude learns something the next session would otherwise rediscover, it suggests a line for the notes. Suggestions wait on the trail (a badge in the sidebar counts them): **Add to notes**, edit first, or **Dismiss**. Say "add this to the trail" and Claude writes it right away.
+  - **And they stay short.** A suggestion that corrects something in the notes takes that line's place, and the trail shows which line. **Condense** has Claude draft a shorter version of the notes for you to review: edit it, then **Replace notes** or **Dismiss**, and **Undo condense** if you change your mind. Past 800 words Stroll asks for that draft on its own; change the limit or turn it off in **Settings › Trails**.
+  - **Workflows can belong to a trail:** connect one under **Workflows** on the trail, or pick the trail in the workflow's Setup. Everything it starts goes on the trail and gets the notes.
   - A trail can **Hand off** a background run, which gets the notes too. **Archive** it when the work is done; archived trails fold under **Archived**.
 - **Sessions in your home folder** answer Claude Code's "trust this folder" prompt for you. Claude Code never remembers trust for the home folder, so it would ask every time, resumes included. Other folders ask once, as usual.
 - **Sidebar sections** collapse when you click their title and move when you drag it, and closed sessions fold under their own **Closed** title. All of it is remembered. A collapsed section shows a yellow dot when something inside needs you.
@@ -87,6 +89,7 @@ A background run is a headless `claude -p`. To be safe to leave unattended:
 
   No answer in 15 minutes counts as Deny. Commands with pipes, loops or variables can only be allowed once.
 - **Some things are never allowed,** and it doesn't ask, even with Allow all: editing files, commits, pushes, PRs, deleting, `curl`, and sending Slack messages or emails. A script you let it run is a different matter: it can do anything you can, so only allow all for runs whose inputs you trust.
+  - The one exception to editing files: a workflow can name **folders its runs may write in** (see Workflows). Those runs create and edit files there without asking, and nowhere else.
 - **Slack, Gmail and Drive reading** is off by default; turn it on in Settings.
 - **It ends with a report:** What I did / Findings / Drafts / Needs you.
 
@@ -107,9 +110,11 @@ A workflow is a saved session for work you repeat: a folder, a first message (of
 - **Start** opens a short form with the blanks, filled with last time's values, and a preview of the message. Enter opens the session, as if you had typed it.
 - **Blanks** in the first message: `{{name}}` is a text field, `{{name=default}}` one with a default, and `{{name?text}}` a switch that adds `text` when it's on.
 - **History** lists the sessions and runs it started.
+- **Trail:** a workflow can belong to a trail. Its sessions, its background runs and its scheduled prep then go on that trail and start with the trail's notes. The start form can pick another trail for one start.
 - **Save as workflow:** right-click a session or a background run to turn it into one.
 - **Schedule** it for some days at a time. When it's due, Stroll either reminds you, or first runs the **prep message** in the background and tells you when it's ready. The prep message is the read-only half, such as a dry run; you continue it in a session to do the rest.
   - It fires only while Stroll is open. A time missed while Stroll was closed shows up as missed; it doesn't run late.
+- **Folders its runs may write in:** for work that keeps its own records, such as a daily digest that saves each report and notes when it last ran. A background run can't edit files, so without this such a run ends with "save and record" left for you, every time. List the folders under Setup (for example `~/.config/tech-digest`) and its runs create and edit files there, and only there, without asking. A link inside a folder that leads out of it doesn't count, and neither does your home folder.
 - **Skills in background runs:** runs load none of your settings, so Stroll turns on just the plugin a `/plugin:skill` message needs, and points a run at a personal skill's `SKILL.md`. A skill that runs shell steps asks you for each one unless the workflow allows everything.
 - **Importing:** put a JSON list of workflows in `~/.stroll/workflows-import.json`. Stroll reads it at launch and renames it.
 

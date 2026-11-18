@@ -2,6 +2,21 @@
 
 Stroll shows the new sections here once, after an update. **Settings › Updates › What's new** shows them all again.
 
+## 0.9.0 — 2026-11-18
+
+### Workflows on trails
+- **A workflow can belong to a trail.** Pick the trail under the workflow's **Setup**, or connect a workflow from the trail, which now lists its workflows. Everything the workflow starts goes on that trail and gets its notes: sessions, background runs, and a scheduled prep.
+- **The start form has a Trail field**, to start a workflow on another trail for that one time.
+- A workflow saved from a session or a run on a trail stays on that trail. A trail shows a yellow dot when one of its workflows is due.
+
+### Background runs that keep their own records
+- **A workflow can name folders its background runs may write in**, under **Setup**. A run can't edit files, so a routine that saves its report or notes when it last ran used to end with that step left for you. With a folder set (say `~/.config/tech-digest`), its runs create and edit files there without asking, and a scheduled one finishes on its own. Everywhere else, edits stay blocked.
+
+### Trail notes that stay short
+- **Condense** on a trail has Claude draft a shorter version of its notes: lines that repeat each other merged, facts that were replaced and progress that's finished dropped. The draft waits on the trail. Edit it, then **Replace notes** or **Dismiss**. **Undo condense** puts the old notes back.
+- **When a trail's notes pass 800 words, Stroll asks for that draft on its own.** The notes change only if you take it. Change the limit or turn it off in **Settings › Trails**.
+- **A suggestion can replace a line instead of adding one.** When something in the notes has changed, Claude suggests the corrected line in its place, and the trail shows the line it replaces.
+
 ## 0.8.0 — 2026-11-10
 
 ### Trails

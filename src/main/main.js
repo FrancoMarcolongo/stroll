@@ -13,7 +13,9 @@ const IS_MAC = process.platform === 'darwin';
 // There the page handles them (app.js), and the menu only shows them.
 const appKey = k => (IS_MAC ? { accelerator: `Cmd+${k}` } : { accelerator: `Ctrl+Shift+${k}`, registerAccelerator: false });
 const { paths, loadConfig, saveOverrides, mergeDeep, findOnPath } = require('./config');
-const { Store } = require('./store');
+const { Store, words, quotedLines } = require('./store');
+const { condenseNotes, killAll: killCondenses } = require('./condense');
+const { cleanWriteDirs } = require('./writable');
 const { Sessions } = require('./sessions');
 const { Runs } = require('./runs');
 const { Approvals } = require('./approvals');
@@ -120,8 +122,10 @@ function trailForApi(trailId, sessionId) {
   const clip = (s, n) => (s && s.length > n ? `${s.slice(0, n)}…` : s);
   return {
     id: t.id, title: t.title, notes: t.notes, cwd: t.cwd, status: t.status,
-    pendingSuggestions: t.suggestions.map(x => x.text),
+    pendingSuggestions: t.suggestions.map(x => ({ text: x.text, replaces: x.replaces })),
     todos: store.state.todos.filter(x => x.trailId === t.id).map(x => ({ id: x.id, title: x.title, status: x.status, notes: x.notes || undefined })),
+    workflows: store.state.workflows.filter(x => x.trailId === t.id)
+      .map(x => ({ id: x.id, name: x.name, runsAs: x.mode === 'run' ? 'background run' : 'session', nextAt: x.nextAt || undefined, lastStartedAt: x.lastStartedAt || undefined })),
     sessions: store.state.sessions.filter(x => x.trailId === t.id)
       .map(x => ({ id: x.id, title: x.title, live: x.live, status: x.status, preview: x.preview, lastActivityAt: x.lastActivityAt, current: x.id === sessionId || undefined })),
     runs: store.state.runs.filter(x => x.trailId === t.id)
@@ -130,10 +134,34 @@ function trailForApi(trailId, sessionId) {
 }
 
 const NO_TRAIL = "This session isn't on a trail. Ask the user which trail they mean (trail_list shows them) and pass its id.";
+const NOT_IN_NOTES = "`replaces` isn't in the notes as they are now (trail_get returns them). Quote a line from them, or leave `replaces` out to add a line.";
+
+// Claude drafts a shorter version of a trail's notes. The draft waits on the trail: the notes
+// change only when the user takes it.
+function startCondense(id, { auto = false } = {}) {
+  const t = store.trail(id);
+  if (!t || t.condense?.status === 'running') return t || null;
+  if (!config.claudePath) throw new Error('Claude Code (`claude`) was not found on your PATH.');
+  if (!t.notes.trim()) throw new Error('There are no notes to condense yet.');
+  const { startedAt, base } = store.startCondense(id, auto);
+  condenseNotes({ config, cwd: paths.dataDir, title: t.title, notes: base })
+    .then(text => store.finishCondense(id, startedAt, { text }), err => store.finishCondense(id, startedAt, { error: err.message }));
+  return t;
+}
+
+// Notes that sessions keep adding to only grow. Past the limit Stroll asks for a shorter draft
+// on its own, and not again until the user has answered it and the notes have grown some more.
+function autoCondense(id) {
+  const t = store.trail(id);
+  const cfg = config.trails || {};
+  if (!t || !cfg.autoCondense || t.status !== 'active' || t.condense || !config.claudePath) return;
+  if (words(t.notes) <= Math.max(Number(cfg.condenseAtWords) || 800, t.condenseSkipWords || 0)) return;
+  startCondense(id, { auto: true });
+}
 
 // ---------- workflows ----------
 const WORKFLOW_GRACE_MS = 15 * 60 * 1000; // a scheduled time missed by more than this was missed
-const WORKFLOW_KEYS = ['name', 'cwd', 'mode', 'template', 'prepareTemplate', 'values', 'runAllowAll', 'schedule'];
+const WORKFLOW_KEYS = ['name', 'cwd', 'mode', 'template', 'prepareTemplate', 'values', 'runAllowAll', 'schedule', 'trailId', 'writeDirs'];
 const shortDate = () => new Date().toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
 const slotLabel = iso => new Date(iso).toLocaleString(undefined, { weekday: 'short', hour: '2-digit', minute: '2-digit' });
 
@@ -143,6 +171,8 @@ function cleanWorkflow(fields = {}) {
   for (const k of WORKFLOW_KEYS) if (k in fields) w[k] = fields[k];
   if ('mode' in w) w.mode = w.mode === 'run' ? 'run' : 'session';
   if ('runAllowAll' in w) w.runAllowAll = Boolean(w.runAllowAll);
+  if ('trailId' in w) w.trailId = store.trail(w.trailId) ? w.trailId : null;
+  if ('writeDirs' in w) w.writeDirs = cleanWriteDirs(w.writeDirs);
   if ('schedule' in w) {
     w.schedule = validSchedule(w.schedule)
       ? { days: [...new Set(w.schedule.days.map(Number))].sort(), time: w.schedule.time, action: w.schedule.action === 'prepare' ? 'prepare' : 'remind' }
@@ -154,8 +184,15 @@ function cleanWorkflow(fields = {}) {
   return w;
 }
 
-// Starts a workflow with the values from its start form, which are kept for next time.
-function startWorkflow(id, values = {}) {
+// What a background run on a trail is told. A session gets more (sessions.js): it can also
+// suggest notes, which a read-only run can't.
+const trailRunContext = trail => (trail
+  ? `This run is part of the user's trail "${trail.title}", a piece of work that takes many sessions. Its notes, the context the user keeps for that work:\n${trail.notes.trim() || '(empty)'}`
+  : null);
+
+// Starts a workflow with the values from its start form, which are kept for next time. What it
+// starts goes on the workflow's trail, or on the one picked for this start (null: none).
+function startWorkflow(id, values = {}, { trailId } = {}) {
   const wf = store.workflow(id);
   if (!wf) throw new Error('That workflow no longer exists.');
   const vals = { ...wf.values, ...values };
@@ -163,8 +200,12 @@ function startWorkflow(id, values = {}) {
   if (!text) throw new Error('This workflow has no first message yet. Add one under Setup.');
   store.updateWorkflow(id, { values: vals, due: null, lastStartedAt: new Date().toISOString() });
   const title = `${wf.name} · ${shortDate()}`;
-  if (wf.mode === 'run') return { type: 'run', id: runs.start({ prompt: text, cwd: wf.cwd, title, workflowId: id, allowAll: wf.runAllowAll }) };
-  return { type: 'session', id: sessions.create({ cwd: wf.cwd, title, firstMessage: text, workflowId: id }) };
+  const trail = store.trail(trailId !== undefined ? trailId : wf.trailId) || null;
+  const cwd = wf.cwd || trail?.cwd || null;
+  if (wf.mode === 'run') {
+    return { type: 'run', id: runs.start({ prompt: text, cwd, title, workflowId: id, allowAll: wf.runAllowAll, trailId: trail?.id || null, context: trailRunContext(trail), writeDirs: wf.writeDirs || [] }) };
+  }
+  return { type: 'session', id: sessions.create({ cwd, title, firstMessage: text, workflowId: id, trailId: trail?.id || null }) };
 }
 
 // The read-only half as a background run, to continue in a session once it's ready.
@@ -173,7 +214,11 @@ function prepareWorkflow(id, at = new Date().toISOString(), scheduled = false) {
   if (!wf) throw new Error('That workflow no longer exists.');
   const text = renderTemplate(wf.prepareTemplate || wf.template, wf.values);
   if (!text) throw new Error('This workflow has no first message yet. Add one under Setup.');
-  const runId = runs.start({ prompt: text, cwd: wf.cwd, title: `${wf.name} · prepared ${shortDate()}`, workflowId: id, allowAll: wf.runAllowAll });
+  const trail = store.trail(wf.trailId) || null;
+  const runId = runs.start({
+    prompt: text, cwd: wf.cwd || trail?.cwd || null, title: `${wf.name} · prepared ${shortDate()}`, workflowId: id, allowAll: wf.runAllowAll,
+    trailId: trail?.id || null, context: trailRunContext(trail), writeDirs: wf.writeDirs || [],
+  });
   store.updateWorkflow(id, { due: { at, missed: false, runId, scheduled } });
   return { type: 'run', id: runId };
 }
@@ -245,6 +290,7 @@ function publicConfig() {
       extraAllowedTools: config.background.extraAllowedTools || [],
     },
     updates: config.updates,
+    trails: config.trails,
     sidebar: config.sidebar,
     claudePath: config.claudePath,
     claudeMissing: !config.claudePath,
@@ -441,11 +487,12 @@ function registerIpc() {
   handle('todo:delete', id => store.deleteTodo(id));
   handle('todo:handoff', (todoIds, opts) => startHandoff(todoIds, opts));
 
-  // A trail made from a session or a to-do takes it in.
-  handle('trail:add', ({ title, notes, cwd, sessionId, todoId } = {}) => {
+  // A trail made from a session, a to-do or a workflow takes it in.
+  handle('trail:add', ({ title, notes, cwd, sessionId, todoId, workflowId } = {}) => {
     const t = store.addTrail({ title, notes, cwd });
     if (sessionId) store.setSessionTrail(sessionId, t.id);
     if (todoId) store.updateTodo(todoId, { trailId: t.id });
+    if (workflowId) store.updateWorkflow(workflowId, { trailId: t.id });
     return t;
   });
   handle('trail:update', (id, patch = {}) => {
@@ -457,7 +504,18 @@ function registerIpc() {
     return store.updateTrail(id, clean);
   });
   handle('trail:delete', id => store.deleteTrail(id));
-  handle('trail:suggestion', (trailId, suggestionId, accept, text) => store.resolveSuggestion(trailId, suggestionId, Boolean(accept), typeof text === 'string' && text.trim() ? text : null));
+  handle('trail:suggestion', (trailId, suggestionId, accept, text) => {
+    const t = store.resolveSuggestion(trailId, suggestionId, Boolean(accept), typeof text === 'string' && text.trim() ? text : null);
+    if (t && accept) autoCondense(trailId);
+    return t;
+  });
+  handle('trail:condense', (id, action, text) => {
+    if (action === 'start') return startCondense(id);
+    if (action === 'apply') return store.applyCondense(id, typeof text === 'string' ? text : null);
+    if (action === 'dismiss') return store.dismissCondense(id);
+    if (action === 'undo') return store.undoCondense(id);
+    return null;
+  });
   handle('session:setTrail', (id, trailId) => store.setSessionTrail(id, trailId || null));
 
   handle('session:create', opts => sessions.create(opts));
@@ -510,7 +568,7 @@ function registerIpc() {
   handle('workflow:add', fields => store.addWorkflow({ cwd: config.defaultCwd, ...cleanWorkflow(fields) }));
   handle('workflow:update', (id, patch) => store.updateWorkflow(id, cleanWorkflow(patch)));
   handle('workflow:delete', id => store.deleteWorkflow(id));
-  handle('workflow:start', (id, values) => startWorkflow(id, values));
+  handle('workflow:start', (id, values, opts) => startWorkflow(id, values, opts && 'trailId' in opts ? { trailId: opts.trailId || null } : {}));
   handle('workflow:prepare', id => prepareWorkflow(id));
   handle('workflow:dismiss', id => store.updateWorkflow(id, { due: null }));
   handle('workflow:render', (template, values) => ({ fields: parseFields(template), text: renderTemplate(template, values) }));
@@ -518,11 +576,11 @@ function registerIpc() {
     const s = store.session(id);
     if (!s) return null;
     const template = s.firstMessage || firstPrompt(s.claudeSessionId || s.id) || '';
-    return store.addWorkflow({ name: (s.title || 'New workflow').replace(/ · .*$/, ''), cwd: s.cwd, template });
+    return store.addWorkflow({ name: (s.title || 'New workflow').replace(/ · .*$/, ''), cwd: s.cwd, template, trailId: s.trailId || null });
   });
   handle('workflow:fromRun', id => {
     const r = store.run(id);
-    return r ? store.addWorkflow({ name: r.title.replace(/ · .*$/, ''), cwd: r.cwd, mode: 'run', template: r.prompt, runAllowAll: Boolean(r.allowAll) }) : null;
+    return r ? store.addWorkflow({ name: r.title.replace(/ · .*$/, ''), cwd: r.cwd, mode: 'run', template: r.prompt, runAllowAll: Boolean(r.allowAll), trailId: r.trailId || null, writeDirs: r.writeDirs || [] }) : null;
   });
 
   handle('recent:list', () => {
@@ -611,16 +669,22 @@ async function boot() {
     listTrails: () => store.state.trails.filter(t => t.status === 'active')
       .map(t => ({ id: t.id, title: t.title, cwd: t.cwd, liveSessions: store.state.sessions.filter(x => x.trailId === t.id && x.live).length, openTodos: store.state.todos.filter(x => x.trailId === t.id && x.status === 'open').length })),
     getTrail: (trailId, sessionId) => trailForApi(trailId, sessionId) || { error: trailId ? 'no such trail' : NO_TRAIL },
-    suggestTrailNote: ({ trailId, sessionId, text }) => {
+    suggestTrailNote: ({ trailId, sessionId, text, replaces }) => {
       const t = store.trail(trailId || store.session(sessionId)?.trailId);
       if (!t) return { error: trailId ? 'no such trail' : NO_TRAIL };
-      const sug = store.suggestTrailNote(t.id, text, sessionId);
-      return sug ? { ok: true, trail: t.title, message: 'Suggested. The user accepts or dismisses it in Stroll.' } : { error: 'text is required' };
+      if (replaces && !quotedLines(t.notes, replaces)) return { error: NOT_IN_NOTES };
+      const sug = store.suggestTrailNote(t.id, text, sessionId, replaces);
+      if (!sug) return { error: 'text is required' };
+      return { ok: true, trail: t.title, message: `Suggested${sug.replaces ? ', in place of the line it replaces' : ''}. The user accepts or dismisses it in Stroll.` };
     },
-    addTrailNote: ({ trailId, sessionId, text }) => {
+    addTrailNote: ({ trailId, sessionId, text, replaces }) => {
       const t = store.trail(trailId || store.session(sessionId)?.trailId);
       if (!t) return { error: trailId ? 'no such trail' : NO_TRAIL };
-      return store.appendTrailNote(t.id, text) ? { ok: true, trail: t.title, notes: store.trail(t.id).notes } : { error: 'text is required' };
+      const old = replaces ? quotedLines(t.notes, replaces) : null;
+      if (replaces && !old) return { error: NOT_IN_NOTES };
+      if (!store.appendTrailNote(t.id, text, old)) return { error: 'text is required' };
+      autoCondense(t.id);
+      return { ok: true, trail: t.title, notes: t.notes };
     },
   });
   writeHookSettings(paths.hookSettings);
@@ -691,6 +755,7 @@ if (!app.requestSingleInstanceLock()) {
     sessions?.killAll();
     sessions?.stop();
     runs?.killAll();
+    killCondenses();
     store?.flush();
     server?.stop();
   });

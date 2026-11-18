@@ -2,6 +2,7 @@ const crypto = require('crypto');
 const { EventEmitter } = require('events');
 const { saveOverrides } = require('./config');
 const { summarizeInput } = require('./runs');
+const { EDIT_TOOLS, isWritable } = require('./writable');
 
 const TIMEOUT_MS = 15 * 60 * 1000;
 const NO_ANSWER = 'Nobody answered within 15 minutes. Skip this step and list it under "Needs you".';
@@ -42,6 +43,14 @@ class Approvals extends EventEmitter {
   request({ runId, toolName, input }) {
     const run = runId && this.store.run(runId);
     if (!run || run.status !== 'running') return { status: 'deny', message: 'No running background run to approve this for.' };
+    // A file edit is never the user's to approve here, "Allow all" or not: yes inside the
+    // folders the run's workflow lets it write in, no anywhere else. (Only such a run gets to
+    // ask; for the others Claude Code refuses edits outright.)
+    if (EDIT_TOOLS.includes(toolName)) {
+      const dirs = run.writeDirs || [];
+      if (isWritable(input?.file_path || input?.notebook_path, dirs)) return { status: 'allow' };
+      return { status: 'deny', message: `File edits are blocked${dirs.length ? ` outside ${dirs.join(' and ')}` : ''}. Skip this step and list it under "Needs you".` };
+    }
     // "Allow all" on this run: yes without asking. Claude Code applied the deny list before
     // asking, so this only covers tools that are neither allowed nor blocked.
     if (run.allowAll) return { status: 'allow' };

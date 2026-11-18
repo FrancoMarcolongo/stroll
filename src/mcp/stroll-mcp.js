@@ -23,7 +23,9 @@ async function api(method, path, body) {
 const text = obj => ({ content: [{ type: 'text', text: typeof obj === 'string' ? obj : JSON.stringify(obj, null, 2) }] });
 const fail = err => ({ isError: true, content: [{ type: 'text', text: `Stroll is not reachable or refused the call: ${err.message}` }] });
 
-const server = new McpServer({ name: 'stroll', version: '0.8.0' });
+const server = new McpServer({ name: 'stroll', version: '0.9.0' });
+
+const REPLACES = 'The line of the notes this takes the place of, copied from the notes as they are now. The whole line goes, so the new text has to carry what still holds from it.';
 
 function registerSessionTools() {
   server.registerTool('todo_list', {
@@ -103,7 +105,7 @@ function registerSessionTools() {
   });
 
   server.registerTool('trail_get', {
-    description: "Get a trail's current notes and its to-dos, sessions and background runs (with their results). Defaults to this session's trail.",
+    description: "Get a trail's current notes and its to-dos, workflows, sessions and background runs (with their results). Defaults to this session's trail.",
     inputSchema: { trail_id: z.string().optional() },
   }, async ({ trail_id }) => {
     const path = trail_id ? `/api/trails/${encodeURIComponent(trail_id)}` : `/api/trails/current?session=${encodeURIComponent(SESSION || '')}`;
@@ -111,17 +113,17 @@ function registerSessionTools() {
   });
 
   server.registerTool('trail_suggest', {
-    description: "Suggest an addition to the trail's notes, the context every future session on the trail starts with. For durable facts a later session would otherwise rediscover: a decision and why, where something lives, a gotcha, who owns what. One or two lines; not progress updates. It waits for the user to accept, edit or dismiss it in Stroll. Defaults to this session's trail.",
-    inputSchema: { text: z.string().min(1), trail_id: z.string().optional() },
-  }, async ({ text: note, trail_id }) => {
-    try { return text(await api('POST', '/api/trails/suggest', { text: note, trailId: trail_id || null, sessionId: SESSION })); } catch (e) { return fail(e); }
+    description: "Suggest an addition to the trail's notes, the context every future session on the trail starts with. For durable facts a later session would otherwise rediscover: a decision and why, where something lives, a gotcha, who owns what. One or two lines; not progress updates. When it corrects or updates something already in the notes, pass `replaces` so it takes that line's place instead of adding one. It waits for the user to accept, edit or dismiss it in Stroll. Defaults to this session's trail.",
+    inputSchema: { text: z.string().min(1), replaces: z.string().optional().describe(REPLACES), trail_id: z.string().optional() },
+  }, async ({ text: note, replaces, trail_id }) => {
+    try { return text(await api('POST', '/api/trails/suggest', { text: note, replaces: replaces || null, trailId: trail_id || null, sessionId: SESSION })); } catch (e) { return fail(e); }
   });
 
   server.registerTool('trail_note_add', {
-    description: "Add a line to the trail's notes right away. Only when the user explicitly asked to add something to the trail's notes; otherwise use trail_suggest. Defaults to this session's trail.",
-    inputSchema: { text: z.string().min(1), trail_id: z.string().optional() },
-  }, async ({ text: note, trail_id }) => {
-    try { return text(await api('POST', '/api/trails/note', { text: note, trailId: trail_id || null, sessionId: SESSION })); } catch (e) { return fail(e); }
+    description: "Add a line to the trail's notes right away, or put it in place of a line that's there (`replaces`). Only when the user explicitly asked to add something to the trail's notes or to change them; otherwise use trail_suggest. Defaults to this session's trail.",
+    inputSchema: { text: z.string().min(1), replaces: z.string().optional().describe(REPLACES), trail_id: z.string().optional() },
+  }, async ({ text: note, replaces, trail_id }) => {
+    try { return text(await api('POST', '/api/trails/note', { text: note, replaces: replaces || null, trailId: trail_id || null, sessionId: SESSION })); } catch (e) { return fail(e); }
   });
 
   server.registerTool('sessions_list', {

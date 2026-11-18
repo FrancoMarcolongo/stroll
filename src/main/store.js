@@ -9,6 +9,29 @@ const localDate = (d = new Date()) => `${d.getFullYear()}-${pad(d.getMonth() + 1
 const DAY = 24 * 60 * 60 * 1000;
 const KEEP_CLOSED_SESSIONS = 100;
 const KEEP_FINISHED_RUNS_DAYS = 30;
+// Once a condensed version of a trail's notes is answered (taken, dismissed or undone), the
+// next one isn't drafted on its own until the notes have grown by this much.
+const REOFFER_GROWTH = 1.25;
+
+const words = s => (String(s || '').match(/\S+/g) || []).length;
+const rtrim = s => String(s || '').replace(/\s+$/, '');
+
+// The whole lines of the notes that `quote` falls on, or null when it isn't there. A session
+// quotes the notes as it read them (indented, maybe without the date), so spacing is ignored.
+function quotedLines(notes, quote) {
+  const parts = String(quote || '').trim().split(/\s+/).filter(Boolean);
+  if (!parts.length) return null;
+  const m = new RegExp(parts.map(p => p.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('\\s+')).exec(notes);
+  if (!m) return null;
+  const start = notes.lastIndexOf('\n', m.index) + 1;
+  const nl = notes.indexOf('\n', m.index + m[0].length);
+  let end = nl < 0 ? notes.length : nl;
+  // A dated line's continuation lines are indented under it and go with it.
+  if (notes.startsWith('- ', start)) {
+    for (let next; (next = /^\n[ \t]+\S[^\n]*/.exec(notes.slice(end)));) end += next[0].length;
+  }
+  return notes.slice(start, end);
+}
 
 function emptyState() {
   return { version: 1, todos: [], sessions: [], runs: [], workflows: [], trails: [], recentDirs: [] };
@@ -33,6 +56,7 @@ class Store extends EventEmitter {
       // were open so they can be resumed in one go.
       for (const sess of s.sessions || []) if (sess.live) { sess.live = false; sess.status = 'closed'; sess.restorable = true; }
       for (const run of s.runs || []) if (run.status === 'running') { run.status = 'interrupted'; run.finishedAt = run.finishedAt || now(); }
+      for (const t of s.trails || []) if (t.condense?.status === 'running') t.condense = null;
       return { ...emptyState(), ...s };
     } catch (e) {
       const backup = `${this.file}.corrupt-${Date.now()}`;
@@ -219,8 +243,8 @@ class Store extends EventEmitter {
   }
 
   // --- trails: sessions about the same piece of work, sharing the trail's notes ---
-  // Membership lives on the members (trailId on to-dos, sessions and runs), never in a list on
-  // the trail, so there's nothing to keep in sync when one of them goes.
+  // Membership lives on the members (trailId on to-dos, sessions, runs and workflows), never in
+  // a list on the trail, so there's nothing to keep in sync when one of them goes.
   trail(id) { return id ? this.state.trails.find(t => t.id === id) : undefined; }
 
   addTrail({ title = 'New trail', notes = '', cwd = null } = {}) {
@@ -246,41 +270,130 @@ class Store extends EventEmitter {
 
   deleteTrail(id) {
     this.state.trails = this.state.trails.filter(t => t.id !== id);
-    for (const list of [this.state.todos, this.state.sessions, this.state.runs]) for (const x of list) if (x.trailId === id) x.trailId = null;
+    for (const list of [this.state.todos, this.state.sessions, this.state.runs, this.state.workflows]) for (const x of list) if (x.trailId === id) x.trailId = null;
     this.changed();
   }
 
-  // Appends a dated line to the notes; the user's own text above it is left as it is.
-  appendTrailNote(id, text) {
+  // Adds a dated line to the notes: at the end, or in place of `replaces` (lines of the notes,
+  // as quotedLines returns them) while they're still there. The user's own text around it is
+  // left as it is.
+  appendTrailNote(id, text, replaces = null) {
     const t = this.trail(id);
     const body = String(text || '').trim();
     if (!t || !body) return null;
     const line = `- [${localDate()}] ${body.replace(/\n/g, '\n  ')}`;
-    const notes = t.notes.replace(/\s+$/, '');
-    t.notes = notes ? `${notes}\n${line}` : line;
+    const at = replaces ? t.notes.indexOf(replaces) : -1;
+    const notes = rtrim(t.notes);
+    if (at >= 0) t.notes = t.notes.slice(0, at) + line + t.notes.slice(at + replaces.length);
+    else t.notes = notes ? `${notes}\n${line}` : line;
     t.updatedAt = now();
     this.changed();
     return t;
   }
 
-  suggestTrailNote(id, text, sessionId = null) {
+  // `replaces` quotes something already in the notes that this corrects. It's kept as the
+  // lines read now, so the trail can show what accepting it takes out.
+  suggestTrailNote(id, text, sessionId = null, replaces = null) {
     const t = this.trail(id);
     const body = String(text || '').trim();
     if (!t || !body) return null;
     const s = { id: crypto.randomUUID(), text: body, sessionId, sessionTitle: this.session(sessionId)?.title || null, createdAt: now() };
+    const old = replaces ? quotedLines(t.notes, replaces) : null;
+    if (old) s.replaces = old;
     t.suggestions.push(s);
     this.changed();
     return s;
   }
 
-  // Accept (optionally with the user's edits) appends it to the notes; dismiss drops it.
+  // Accept (optionally with the user's edits) adds it to the notes, in place of the lines it
+  // replaces when it has some; dismiss drops it.
   resolveSuggestion(trailId, suggestionId, accept, text = null) {
     const t = this.trail(trailId);
     const s = t?.suggestions.find(x => x.id === suggestionId);
     if (!s) return null;
     t.suggestions = t.suggestions.filter(x => x.id !== suggestionId);
-    if (accept) this.appendTrailNote(trailId, text ?? s.text);
+    if (accept) this.appendTrailNote(trailId, text ?? s.text, s.replaces);
     else this.changed();
+    return t;
+  }
+
+  // --- condensing: a shorter version of the notes, drafted by Claude, that the user reviews ---
+  // trail.condense is the draft in progress ({ status: running | ready | failed, base: the
+  // notes it was made from, text, auto: Stroll started it because the notes got long }).
+  startCondense(id, auto = false) {
+    const t = this.trail(id);
+    if (!t) return null;
+    t.condense = { status: 'running', auto: Boolean(auto), base: t.notes, startedAt: now() };
+    this.changed();
+    return t.condense;
+  }
+
+  // `startedAt` names the draft, so a late answer to one that was dismissed changes nothing. A
+  // draft that isn't shorter isn't worth the user's time, and one Stroll started fails quietly.
+  finishCondense(id, startedAt, { text = '', error = null } = {}) {
+    const t = this.trail(id);
+    const c = t?.condense;
+    if (!c || c.status !== 'running' || c.startedAt !== startedAt) return null;
+    const body = String(text || '').trim();
+    const fromWords = words(c.base);
+    const toWords = words(body);
+    const problem = error || (!body ? 'Claude returned nothing.' : toWords >= fromWords ? 'Claude found nothing to cut.' : null);
+    if (!problem) t.condense = { ...c, status: 'ready', text: body, fromWords, toWords, finishedAt: now() };
+    else if (c.auto) this.answerCondense(t);
+    else t.condense = { ...c, status: 'failed', error: problem, finishedAt: now() };
+    this.changed();
+    return t;
+  }
+
+  answerCondense(t) {
+    t.condense = null;
+    t.condenseSkipWords = Math.round(words(t.notes) * REOFFER_GROWTH);
+  }
+
+  // The notes still begin as they did when the draft was made: anything after that was added
+  // since (an accepted suggestion, a line typed at the end) and is kept after the draft.
+  addedSince(t, base) {
+    const start = rtrim(base);
+    return t.notes.startsWith(start) ? t.notes.slice(start.length).trim() : null;
+  }
+
+  // Replaces the notes with the draft, as the user edited it. The notes it replaces are kept
+  // for one undo.
+  applyCondense(id, text = null) {
+    const t = this.trail(id);
+    const c = t?.condense;
+    if (!c || c.status !== 'ready') return null;
+    const added = this.addedSince(t, c.base);
+    if (added === null) throw new Error('The notes changed since this was drafted. Condense them again.');
+    const body = String(text ?? '').trim() || c.text;
+    const before = t.notes;
+    t.notes = added ? `${body}\n${added}` : body;
+    t.previousNotes = { text: before, after: t.notes, at: now() };
+    this.answerCondense(t);
+    t.updatedAt = now();
+    this.changed();
+    return t;
+  }
+
+  dismissCondense(id) {
+    const t = this.trail(id);
+    if (!t?.condense) return null;
+    this.answerCondense(t);
+    this.changed();
+    return t;
+  }
+
+  // Puts back the notes from before the last condense, with the lines added after it.
+  undoCondense(id) {
+    const t = this.trail(id);
+    const p = t?.previousNotes;
+    if (!p) return null;
+    const added = this.addedSince(t, p.after);
+    t.notes = added ? `${rtrim(p.text)}\n${added}` : p.text;
+    t.previousNotes = null;
+    this.answerCondense(t);
+    t.updatedAt = now();
+    this.changed();
     return t;
   }
 
@@ -299,4 +412,4 @@ class Store extends EventEmitter {
   }
 }
 
-module.exports = { Store };
+module.exports = { Store, words, quotedLines };

@@ -8,6 +8,7 @@ const { childEnv } = require('./config');
 const { summarizeInput } = require('./runs');
 const { transcriptFor } = require('./recent');
 const { BackgroundTracker, endedIds } = require('./background');
+const { words } = require('./store');
 
 const BUFFER_LIMIT = 2 * 1024 * 1024; // chars of scrollback kept for replay when a view (re)attaches
 const TRANSCRIPT_TAIL = 512 * 1024;
@@ -78,22 +79,25 @@ function lastAssistantText(file) {
   return null;
 }
 
-const words = s => (String(s || '').match(/\S+/g) || []).length;
 const THIN_NOTES_WORDS = 15;
 
 // What a session on a trail is told: the trail's notes, and how to keep them useful for the
-// next session (suggest, the user accepts; write directly only when the user asks).
-function trailContext(trail) {
+// next session (suggest, the user accepts; write directly only when the user asks) and short
+// (correct a line in place rather than add one). `longWords`: past it the notes are long.
+function trailContext(trail, longWords = Infinity) {
   const notes = String(trail.notes || '').trim();
+  const count = words(notes);
   const lines = [
-    `This session is on the trail "${trail.title}": a line of sessions about the same piece of work that share the trail's notes. The notes as of when this session started (\`trail_get\` returns the latest, plus the trail's to-dos, sessions and background runs):`,
+    `This session is on the trail "${trail.title}": a line of sessions about the same piece of work that share the trail's notes. The notes as of when this session started (\`trail_get\` returns the latest, plus the trail's to-dos, workflows, sessions and background runs):`,
     notes ? notes.split('\n').map(l => `  ${l}`).join('\n') : '  (empty)',
   ];
-  if (words(notes) < THIN_NOTES_WORDS) {
+  if (count < THIN_NOTES_WORDS) {
     lines.push('The notes are still thin. Early on, ask the user for what a future session would need to know (the goal, the repos and folders involved, the ticket or epic, constraints) and suggest it with `trail_suggest`.');
   }
   lines.push(
     'Keep the notes useful for the next session: when you learn something it would otherwise have to rediscover (a decision and why, where something lives, a gotcha, who owns what), suggest it with `trail_suggest`, one or two lines each, a few per session at most, usually when a piece of work is done. Say in one line what you suggested; the user accepts or dismisses it in Stroll. No progress updates, and nothing the code, git history or tickets already say. Facts about this trail go in the trail rather than in your own memory files.',
+    'Every session reads the notes, so they should stay short. When something in them has changed or turned out wrong, suggest the corrected line with `replaces` set to the line it takes the place of, copied from the notes, instead of adding a line that contradicts it.'
+      + (count > longWords ? ` They are long now (${count} words): suggest only what a future session can't do without.` : ''),
     'When the user explicitly asks you to add something to the trail\'s notes, use `trail_note_add`, which writes it right away.',
   );
   return lines.join('\n');
@@ -110,11 +114,11 @@ function todoContext(todos) {
 
 // Appended to the system prompt when the session starts (and again on every resume, so a
 // resumed session gets the notes as they are now).
-function sessionContext(trail, todos) {
+function sessionContext(trail, todos, longWords) {
   if (!trail && !todos.length) return null;
   return [
     "This session was started from Stroll, the user's session manager.",
-    trail ? trailContext(trail) : null,
+    trail ? trailContext(trail, longWords) : null,
     todos.length ? todoContext(todos) : null,
   ].filter(Boolean).join('\n\n');
 }
@@ -168,7 +172,7 @@ class Sessions extends EventEmitter {
     const args = ['--mcp-config', this.paths.mcpConfig, '--settings', this.paths.hookSettings];
     args.push(...(resumable ? ['--resume', resumable] : ['--session-id', id]));
     if (!resumable && (title || existing?.title)) args.push('--name', title || existing.title);
-    const context = sessionContext(trail, todos);
+    const context = sessionContext(trail, todos, Number(this.config.trails?.condenseAtWords) || undefined);
     if (context) args.push('--append-system-prompt', context);
     if (firstMessage && firstMessage.trim()) args.push('--', firstMessage.trim());
 

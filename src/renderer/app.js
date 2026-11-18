@@ -100,6 +100,7 @@ const ICON = {
   note: svgIcon('<path d="M4 20h4L19 9l-4-4L4 16z"/><path d="M13.5 6.5l4 4"/>'),
   archive: svgIcon('<rect x="3" y="4" width="18" height="5" rx="1.5"/><path d="M5 9v9a2 2 0 002 2h10a2 2 0 002-2V9"/><path d="M10 13h4"/>'),
   sparkle: svgIcon('<path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9z"/><path d="M19 15l.8 2.2L22 18l-2.2.8L19 21l-.8-2.2L16 18l2.2-.8z"/>'),
+  condense: svgIcon('<path d="M4 6h16M7 12h10M10 18h4"/>'),
 };
 document.querySelectorAll('[data-icon]').forEach(el => { el.innerHTML = ICON[el.dataset.icon] || ''; });
 
@@ -267,12 +268,14 @@ function archivedTrailRows(archived) {
 }
 
 // ---------- trails ----------
-// A trail's state comes from its live sessions and its background runs, with the same dots.
+// A trail's state comes from its live sessions, its background runs and its workflows that are
+// due, with the same dots.
 const trailSessions = tr => S.data.sessions.filter(s => s.trailId === tr.id);
 const trailRuns = tr => S.data.runs.filter(r => r.trailId === tr.id);
 const trailTodos = tr => S.data.todos.filter(t => t.trailId === tr.id);
+const trailWorkflows = tr => (S.data.workflows || []).filter(w => w.trailId === tr.id);
 function trailDot(tr) {
-  const dots = [...trailSessions(tr).filter(s => s.live).map(sessionDot), ...trailRuns(tr).map(runDot)];
+  const dots = [...trailSessions(tr).filter(s => s.live).map(sessionDot), ...trailRuns(tr).map(runDot), ...trailWorkflows(tr).map(workflowDot)];
   return ['waiting', 'idle', 'working', 'bg'].find(d => dots.includes(d)) || 'none';
 }
 const lastActivity = list => list.map(x => x.lastActivityAt || x.finishedAt || x.startedAt).filter(Boolean).sort().pop() || null;
@@ -299,7 +302,7 @@ function trailWork(tr) {
 
 function trailRow(tr) {
   const isActive = S.view.type === 'trail' && S.view.id === tr.id;
-  const n = tr.suggestions?.length || 0;
+  const n = (tr.suggestions?.length || 0) + (tr.condense?.status === 'ready' ? 1 : 0);
   const badge = n ? `<span class="sugg-badge" title="${plural(n, 'suggestion')} for the notes">${ICON.note}${n}</span>` : '';
   return `<li class="row ${isActive ? 'active' : ''} ${tr.status === 'archived' ? 'dim' : ''}" data-kind="trail" data-id="${esc(tr.id)}" title="${esc(shortDir(tr.cwd || ''))}">
     ${dotHtml(trailDot(tr))}
@@ -650,6 +653,7 @@ function updateRunMeta() {
   const bits = [shortDir(r.cwd), `started ${agoText(r.startedAt)}`];
   if (r.durationMs) bits.push(fmtDuration(r.durationMs));
   if (r.costUsd != null) bits.push(`$${r.costUsd.toFixed(2)}`);
+  if (r.writeDirs?.length) bits.push(`may write in ${r.writeDirs.map(shortDir).join(', ')}`);
   meta.textContent = bits.join(' · ');
 }
 
@@ -783,7 +787,9 @@ function renderTodoLinks() {
 }
 
 // ---------- trail view ----------
-const LONG_NOTES_WORDS = 2000;
+const longNotesWords = () => Number(S.data.config.trails?.condenseAtWords) || 800;
+const MIN_CONDENSE_WORDS = 50; // shorter notes have nothing to condense
+const UNDO_CONDENSE_MS = 7 * 24 * 60 * 60 * 1000;
 const wordCount = text => (String(text || '').match(/\S+/g) || []).length;
 const TRAIL_PILL = { waiting: 'Needs you', idle: 'Your turn', working: 'Working', bg: 'Running in the background' };
 
@@ -803,7 +809,8 @@ function renderTrail(header, panel) {
     <button class="btn danger" data-act="trail-delete">${ICON.trash}Delete</button>`;
   panel.innerHTML = `<div class="todo-view trail-view">
     <div id="trail-suggestions"></div>
-    <div class="field"><label>Notes <span class="hint">shared context: every session on this trail starts with them</span></label>
+    <div id="trail-condensed"></div>
+    <div class="field"><div class="label-row"><label>Notes <span class="hint">shared context: every session on this trail starts with them</span></label><span class="spacer"></span><span id="trail-condense" class="contents"></span></div>
       <textarea id="trail-notes" spellcheck="false" placeholder="What every session on this trail should know: the goal, the repos and folders, the ticket or epic, decisions made and why, gotchas, who owns what.">${esc(tr.notes)}</textarea>
       <p class="help" id="trail-notes-help"></p></div>
     <div class="field"><label>Title</label><input type="text" id="trail-title" value="${esc(tr.title)}"></div>
@@ -811,6 +818,8 @@ function renderTrail(header, panel) {
       <p class="help">Where its sessions and hand-offs start, unless a to-do has a folder of its own.</p></div>
     <div class="field links"><label>To-dos</label><ul class="list" id="trail-todos"></ul>
       <form id="trail-add-todo" class="inline-add" autocomplete="off">${ICON.plus}<input placeholder="Add a to-do to this trail" spellcheck="false"></form></div>
+    <div class="field links"><label>Workflows <span class="hint">what they start goes on this trail, with its notes</span></label><ul class="list" id="trail-workflows"></ul>
+      <select id="trail-add-workflow" aria-label="Connect a workflow to this trail"></select></div>
     <div class="field links"><label>Sessions</label><ul class="list" id="trail-sessions"></ul></div>
     <div class="field links" id="trail-runs-field"><label>Background runs</label><ul class="list" id="trail-runs"></ul></div>
   </div>`;
@@ -820,7 +829,7 @@ function renderTrail(header, panel) {
   const notesHelp = () => {
     const n = wordCount(notes.value);
     $('#trail-notes-help').innerHTML = `${n ? `${n.toLocaleString()} word${n === 1 ? '' : 's'}. ` : ''}Sessions on this trail suggest additions as they learn things; you accept them above. Ask Claude to “add this to the trail” to write one right away.`
-      + (n > LONG_NOTES_WORDS ? ' <span class="warn">Long notes take up context in every session; consider trimming them.</span>' : '');
+      + (n > longNotesWords() ? ' <span class="warn">Long notes take up context in every session: condense them, or trim them by hand.</span>' : '');
   };
   notes.addEventListener('input', notesHelp);
   // Lines a session added while this was being edited are kept: they're appended after the edit.
@@ -845,11 +854,42 @@ function renderTrail(header, panel) {
     input.value = '';
     await api.invoke('todo:add', { title, trailId: tr.id });
   });
+  // Connects a workflow that exists (moving it here if it was on another trail), or a new one.
+  $('#trail-add-workflow').addEventListener('change', async e => {
+    const pick = e.target.value;
+    e.target.value = '';
+    e.target.blur();
+    if (pick === '__new') {
+      const cwd = trail(tr.id)?.cwd;
+      const w = await api.invoke('workflow:add', { trailId: tr.id, ...(cwd ? { cwd } : {}) });
+      navigate({ type: 'workflow', id: w.id });
+      setTimeout(() => { $('#wf-name')?.focus(); $('#wf-name')?.select(); }, 100);
+    } else if (pick) {
+      await api.invoke('workflow:update', pick, { trailId: tr.id });
+      flash(`“${workflow(pick)?.name}” is on this trail now`, null, { ms: 2500 });
+    }
+  });
   renderTrailLive();
 }
 
+// A shorter version of the notes that Claude drafted, for the user to edit and take or dismiss.
+// `stale`: the notes changed under it (other than by lines added at the end), so it no longer fits.
+function condensedHtml(c, text, stale) {
+  const rows = text.split('\n').reduce((n, line) => n + Math.max(1, Math.ceil(line.length / 110)), 1);
+  return `<div class="suggestions">
+    <div class="ap-head">${ICON.condense}<b>Shorter notes to review</b><span class="h-meta">${c.fromWords.toLocaleString()} → ${c.toWords.toLocaleString()} words · ${c.auto ? 'drafted because the notes got long' : `drafted ${agoText(c.finishedAt)}`}</span></div>
+    <div class="sugg"><textarea rows="${Math.min(18, Math.max(5, rows))}" spellcheck="false">${esc(text)}</textarea>
+      <div class="sugg-foot"><span class="h-meta">${stale ? '<span class="warn">The notes changed since this was drafted.</span>' : 'Edit it if you like. It replaces the notes below; lines added since are kept.'}</span><span class="spacer"></span>
+        ${stale ? `<button class="btn sm primary" data-act="condense-start">${ICON.condense}Condense again</button>` : `<button class="btn sm primary" data-act="condense-apply">${ICON.check}Replace notes</button>`}<button class="btn sm ghost" data-act="condense-dismiss">Dismiss</button></div></div>
+  </div>`;
+}
+const condenseFailedHtml = c => `<div class="suggestions">
+    <div class="ap-head">${ICON.alert}<b>The notes weren’t condensed</b><span class="h-meta">${esc(c.error)}</span></div>
+    <div class="sugg-foot"><span class="spacer"></span><button class="btn sm" data-act="condense-start">${ICON.resume}Try again</button><button class="btn sm ghost" data-act="condense-dismiss">Dismiss</button></div>
+  </div>`;
+
 // The parts of the trail view that follow state pushes. Text being edited (the notes, a
-// suggestion) is never replaced under the cursor.
+// suggestion, a condensed draft) is never replaced under the cursor.
 function renderTrailLive() {
   const tr = trail(S.view.id);
   if (!tr || !$('#trail-notes')) return;
@@ -871,19 +911,41 @@ function renderTrailLive() {
     notes.dispatchEvent(new Event('input'));
   }
 
-  // Suggestions: rebuilt only when the set changes, keeping any edits in progress.
+  // Condense: offered once there's something to shorten and no draft is waiting.
+  const c = tr.condense;
+  const undo = tr.previousNotes && Date.now() - new Date(tr.previousNotes.at).getTime() < UNDO_CONDENSE_MS;
+  setHtml($('#trail-condense'),
+    (undo ? `<button class="btn sm ghost" data-act="condense-undo" title="Put back the notes from before they were condensed">${ICON.resume}Undo condense</button>` : '')
+    + (c?.status === 'running' ? `<button class="btn sm" disabled>${ICON.condense}Condensing…</button>`
+      : !c && wordCount(tr.notes) >= MIN_CONDENSE_WORDS ? `<button class="btn sm" data-act="condense-start" title="Claude drafts a shorter version of these notes for you to review">${ICON.condense}Condense</button>` : ''));
+
+  // The condensed draft: rebuilt only when it changes, keeping the user's edits to it.
+  const cbox = $('#trail-condensed');
+  const stale = c?.status === 'ready' && !tr.notes.startsWith(c.base.replace(/\s+$/, ''));
+  const ckey = c && c.status !== 'running' ? `${c.startedAt}:${c.status}:${stale}` : '';
+  if (cbox.dataset.key !== ckey) {
+    const edited = c && cbox.dataset.draft === c.startedAt ? cbox.querySelector('textarea')?.value : null;
+    cbox.dataset.key = ckey;
+    cbox.dataset.draft = c?.startedAt || '';
+    cbox.innerHTML = !ckey ? '' : c.status === 'failed' ? condenseFailedHtml(c) : condensedHtml(c, edited ?? c.text, stale);
+  }
+
+  // Suggestions: rebuilt only when the set changes, keeping any edits in progress. One that
+  // replaces lines of the notes shows them, for as long as they're still there.
   const box = $('#trail-suggestions');
   const sugs = tr.suggestions || [];
-  const key = sugs.map(x => x.id).join(',');
+  const swaps = x => Boolean(x.replaces && tr.notes.includes(x.replaces));
+  const key = sugs.map(x => `${x.id}${swaps(x) ? '>' : ''}`).join(',');
   if (box.dataset.key !== key) {
     const edits = new Map([...box.querySelectorAll('[data-sugg]')].map(el => [el.dataset.sugg, el.querySelector('textarea').value]));
     box.dataset.key = key;
     box.innerHTML = !sugs.length ? '' : `<div class="suggestions">
       <div class="ap-head">${ICON.note}<b>Suggested for the notes</b><span class="h-meta">by sessions on this trail · edit before adding if you like</span></div>
-      ${sugs.map(x => `<div class="sugg" data-sugg="${esc(x.id)}">
+      ${sugs.map(x => `<div class="sugg" data-sugg="${esc(x.id)}"${swaps(x) ? ' data-swap' : ''}>
+        ${x.replaces ? `<div class="sugg-old">${swaps(x) ? 'Takes the place of' : 'The line it was to replace is gone from the notes, so this adds one. It was'}: <del>${esc(x.replaces)}</del></div>` : ''}
         <textarea rows="${Math.min(6, Math.max(1, Math.ceil(x.text.length / 110)))}" spellcheck="false">${esc(edits.get(x.id) ?? x.text)}</textarea>
         <div class="sugg-foot"><span class="h-meta">${x.sessionTitle ? `From “${esc(x.sessionTitle)}” · ` : ''}${agoText(x.createdAt)}</span><span class="spacer"></span>
-          <button class="btn sm primary" data-act="sug-accept">${ICON.check}Add to notes</button><button class="btn sm ghost" data-act="sug-dismiss">Dismiss</button></div>
+          <button class="btn sm primary" data-act="sug-accept">${ICON.check}${swaps(x) ? 'Replace in notes' : 'Add to notes'}</button><button class="btn sm ghost" data-act="sug-dismiss">Dismiss</button></div>
       </div>`).join('')}
     </div>`;
   }
@@ -892,6 +954,11 @@ function renderTrailLive() {
   const open = todos.filter(t => t.status === 'open').sort(byOrder);
   const done = todos.filter(t => t.status === 'done').sort((a, b) => (b.doneAt || '').localeCompare(a.doneAt || '')).slice(0, 8);
   patchList($('#trail-todos'), [...open, ...done].map(todoRow).join('') || '<li class="empty" style="padding-left:0">No to-dos on this trail yet.</li>');
+  patchList($('#trail-workflows'), trailWorkflows(tr).map(workflowRow).join(''));
+  const addWf = $('#trail-add-workflow');
+  const others = (S.data.workflows || []).filter(w => w.trailId !== tr.id);
+  const addWfOptions = `<option value="">Connect a workflow…</option>${others.map(w => `<option value="${esc(w.id)}">${esc(w.name)}${trail(w.trailId) ? ` (now on “${esc(trail(w.trailId).title)}”)` : ''}</option>`).join('')}<option value="__new">New workflow on this trail…</option>`;
+  if (document.activeElement !== addWf && addWf.dataset.markup !== addWfOptions) { addWf.innerHTML = addWfOptions; addWf.dataset.markup = addWfOptions; }
   const sess = trailSessions(tr).sort((a, b) => (b.live - a.live) || (b.lastActivityAt || '').localeCompare(a.lastActivityAt || ''));
   patchList($('#trail-sessions'), sess.slice(0, 15).map(sessionRow).join('')
     + (sess.length > 15 ? `<li class="empty" style="padding-left:0">and ${sess.length - 15} older</li>` : '')
@@ -1276,7 +1343,7 @@ document.addEventListener('click', async e => {
       }
       case 'trail-delete': {
         const tr = trail(S.view.id);
-        if (await confirmModal({ title: `Delete “${tr.title}”?`, body: 'Its notes go. Its sessions, to-dos and runs stay, without a trail. Archive it instead to keep the notes.', confirm: 'Delete', danger: true })) {
+        if (await confirmModal({ title: `Delete “${tr.title}”?`, body: 'Its notes go. Its sessions, to-dos, runs and workflows stay, without a trail. Archive it instead to keep the notes.', confirm: 'Delete', danger: true })) {
           await api.invoke('trail:delete', tr.id);
           navigate({ type: 'home' });
         }
@@ -1292,7 +1359,23 @@ document.addEventListener('click', async e => {
         if (!box) return undefined;
         const accept = act === 'sug-accept';
         await api.invoke('trail:suggestion', S.view.id, box.dataset.sugg, accept, accept ? box.querySelector('textarea').value : null);
-        return accept ? flash('Added to the notes', null, { ms: 1800 }) : undefined;
+        return accept ? flash(box.hasAttribute('data-swap') ? 'Replaced in the notes' : 'Added to the notes', null, { ms: 1800 }) : undefined;
+      }
+      case 'condense-start': return api.invoke('trail:condense', S.view.id, 'start').catch(flashError);
+      case 'condense-dismiss': return api.invoke('trail:condense', S.view.id, 'dismiss');
+      case 'condense-apply': {
+        try {
+          await api.invoke('trail:condense', S.view.id, 'apply', $('#trail-condensed textarea')?.value ?? null);
+          flash('Notes replaced. Undo condense puts the old ones back.', null, { ms: 6000 });
+        } catch (err) { flashError(err); }
+        return undefined;
+      }
+      case 'condense-undo': {
+        if (await confirmModal({ title: 'Put back the notes from before condensing?', body: 'Lines added since then stay. Other edits made to the notes since then are lost.', confirm: 'Put them back' })) {
+          await api.invoke('trail:condense', S.view.id, 'undo');
+          flash('The notes are back as they were', null, { ms: 2500 });
+        }
+        return undefined;
       }
       case 'mark-unread': return api.invoke('session:markRead', S.view.id, false);
       case 'restore-all': {
@@ -1790,6 +1873,7 @@ function renderWorkflow(header, panel) {
   header.innerHTML = `
     <span class="h-title" id="wf-title">${esc(w.name)}</span>
     <span id="wf-pill"></span>
+    <span id="wf-trail-chip"></span>
     <span class="h-meta" id="wf-meta"></span>
     <span class="spacer"></span>
     <button class="btn primary" data-act="wf-start-current">${ICON.play}Start</button>
@@ -1801,7 +1885,9 @@ function renderWorkflow(header, panel) {
     <div class="field links"><label>History</label><ul class="list" id="wf-history"></ul></div>
     <section class="set-group"><h3>Setup</h3>
       <div class="field"><label>Name</label><input type="text" id="wf-name" value="${esc(w.name)}"></div>
-      <div class="field"><label>Working directory</label><div class="inline"><input type="text" id="wf-cwd" value="${esc(w.cwd || '')}" placeholder="${esc(S.data.config.defaultCwd)}"><button class="btn" data-act="wf-pick-cwd">Browse…</button></div></div>
+      <div class="field"><label>Working directory</label><div class="inline"><input type="text" id="wf-cwd" value="${esc(w.cwd || '')}" placeholder="${esc(trail(w.trailId)?.cwd || S.data.config.defaultCwd)}"><button class="btn" data-act="wf-pick-cwd">Browse…</button></div></div>
+      <div class="field"><label>Trail</label><select id="wf-trail"></select>
+        <p class="help">What it starts, a scheduled prep included, goes on the trail and gets the trail’s notes. The start form can pick another trail for one start.</p></div>
       <div class="field"><label>Runs as</label><select id="wf-mode">
         <option value="session" ${w.mode !== 'run' ? 'selected' : ''}>A session: you work through it with Claude</option>
         <option value="run" ${w.mode === 'run' ? 'selected' : ''}>A background run: it reports back when done</option></select></div>
@@ -1810,6 +1896,8 @@ function renderWorkflow(header, panel) {
       <div class="field"><label>Prep message (optional)</label><textarea id="wf-prepare" rows="2" spellcheck="false" placeholder="The read-only half, e.g. a diff-only or report-only variant. Same blanks.">${esc(w.prepareTemplate || '')}</textarea>
         <p class="help">"Prepare now" and a scheduled prep run this in the background with your last values. When it's ready, continue it in a session to do the rest. Empty means the first message.</p></div>
       ${toggle('wf-allow-all', w.runAllowAll, 'Its background runs allow everything they ask for', ALLOW_ALL_HELP)}
+      <div class="field"><label>Its background runs may write in</label><textarea id="wf-write-dirs" rows="2" spellcheck="false" placeholder="One folder per line, e.g. ~/.config/tech-digest">${esc((w.writeDirs || []).map(shortDir).join('\n'))}</textarea>
+        <p class="help">For work that keeps its own records, such as a saved report or a “last run” file. Its runs create and edit files in these folders without asking, so a scheduled one finishes on its own. Everywhere else, edits stay blocked.</p></div>
     </section>
     <section class="set-group"><h3>Schedule</h3>
       <div class="field"><label>Days</label><div class="day-picks">${DAYS.map((d, i) => `<button type="button" class="chip day ${sched.days.includes(i) ? 'on' : ''}" data-day="${i}">${d}</button>`).join('')}</div></div>
@@ -1826,10 +1914,25 @@ function renderWorkflow(header, panel) {
   const on = (sel, ev, fn) => panel.querySelector(sel).addEventListener(ev, fn);
   on('#wf-name', 'change', e => { const v = e.target.value.trim(); if (v) save({ name: v }); });
   on('#wf-cwd', 'change', e => save({ cwd: e.target.value.trim() || null }));
+  on('#wf-trail', 'change', async e => {
+    if (e.target.value !== '__new') return save({ trailId: e.target.value || null });
+    const cur = workflow(w.id) || w;
+    const tr = await api.invoke('trail:add', { title: cur.name, cwd: cur.cwd, workflowId: w.id });
+    e.target.blur();
+    e.target.dataset.markup = '';
+    renderWorkflowLive();
+    return flash(`Started the trail “${tr.title}”. Open it to write its notes.`, { type: 'trail', id: tr.id }, { ms: 6000 });
+  });
   on('#wf-mode', 'change', e => save({ mode: e.target.value }));
   on('#wf-template', 'change', e => save({ template: e.target.value.trim() }));
   on('#wf-prepare', 'change', e => save({ prepareTemplate: e.target.value.trim() }));
   on('#wf-allow-all', 'change', e => save({ runAllowAll: e.target.checked }));
+  on('#wf-write-dirs', 'change', async e => {
+    const typed = e.target.value.split('\n').map(l => l.trim()).filter(Boolean);
+    const kept = (await save({ writeDirs: typed }))?.writeDirs || [];
+    e.target.value = kept.map(shortDir).join('\n');
+    if (kept.length < new Set(typed).size) flash('A folder has to be a full path, and not your home folder or one above it', null, { error: true, ms: 7000 });
+  });
   const saveSchedule = () => {
     const days = [...panel.querySelectorAll('.day.on')].map(b => Number(b.dataset.day));
     save({ schedule: days.length ? { days, time: $('#wf-time').value || '10:00', action: $('#wf-action').value } : null });
@@ -1846,7 +1949,11 @@ function renderWorkflowLive() {
   if (!w || !$('#wf-due')) return;
   const setHtml = (el, markup) => { if (el && el.dataset.markup !== markup) { el.innerHTML = markup; el.dataset.markup = markup; } };
   $('#wf-title').textContent = w.name;
-  $('#wf-meta').textContent = `${shortDir(w.cwd || S.data.config.defaultCwd)} · ${MODE_LABEL[w.mode] || ''}`;
+  $('#wf-meta').textContent = `${shortDir(w.cwd || trail(w.trailId)?.cwd || S.data.config.defaultCwd)} · ${MODE_LABEL[w.mode] || ''}`;
+  setHtml($('#wf-trail-chip'), trailChip(w.trailId));
+  const trailSel = $('#wf-trail');
+  const trailOpts = `${trailOptions(w.trailId)}<option value="__new">New trail from this workflow…</option>`;
+  if (document.activeElement !== trailSel && trailSel.dataset.markup !== trailOpts) { trailSel.innerHTML = trailOpts; trailSel.dataset.markup = trailOpts; }
   const dot = workflowDot(w);
   setHtml($('#wf-pill'), w.due ? `<span class="pill ${dot === 'none' ? 'neutral' : dot}"><i></i>${esc(workflowStatus(w))}</span>`
     : w.nextAt ? `<span class="pill neutral"><i></i>Next ${esc(slotText(w.nextAt))}</span>` : '');
@@ -1886,10 +1993,11 @@ async function startWorkflowModal(id) {
   const values = { ...w.values };
   modal(`
     <h2>Start “${esc(w.name)}”</h2>
-    <div class="sub">${esc(MODE_LABEL[w.mode] || '')} in ${esc(shortDir(w.cwd || S.data.config.defaultCwd))}</div>
+    <div class="sub">${esc(MODE_LABEL[w.mode] || '')} in ${esc(shortDir(w.cwd || trail(w.trailId)?.cwd || S.data.config.defaultCwd))}</div>
     ${fields.map(f => (f.kind === 'switch'
     ? toggle(`wf-f-${f.key}`, Boolean(values[f.key]), esc(f.label), `Adds <code>${esc(f.text)}</code>`)
     : `<div class="field"><label>${esc(f.label)}</label><input type="text" data-key="${esc(f.key)}" value="${esc(values[f.key] ?? '')}" placeholder="${esc(f.default)}" spellcheck="false"></div>`)).join('')}
+    ${trailField(w.trailId || null)}
     <div class="field"><label>${w.mode === 'run' ? 'Prompt' : 'First message'}</label><pre class="wf-preview" id="wf-preview"></pre></div>
     <footer><button class="btn ghost" data-close>Cancel</button><button class="btn primary" data-go>${ICON.play}Start <kbd>↩</kbd></button></footer>
   `, (m, close) => {
@@ -1910,7 +2018,9 @@ async function startWorkflowModal(id) {
     preview();
     const go = async () => {
       let view;
-      try { view = await api.invoke('workflow:start', id, read()); } catch (err) { return flashError(err); }
+      // The trail picked here is for this start; the workflow keeps its own (Setup).
+      const onTrail = m.querySelector('select[name=trail]');
+      try { view = await api.invoke('workflow:start', id, read(), onTrail ? { trailId: onTrail.value || null } : {}); } catch (err) { return flashError(err); }
       close();
       return navigate(view);
     };
@@ -1960,6 +2070,10 @@ function renderSettings(header, panel) {
         <textarea id="set-extra-rules" rows="4" spellcheck="false" placeholder="One rule per line, e.g. Bash(python3 ~/scripts/read_tickets.py:*)">${esc((c.background.extraAllowedTools || []).join('\n'))}</textarea>
         <p class="help">Claude Code permission rules. Anything a run wants that isn't allowed asks you first; edits, pushes, PRs and sending messages are never allowed.</p></div>
     </section>
+    <section class="set-group"><h3>Trails</h3>
+      ${toggle('set-auto-condense', c.trails.autoCondense, 'Draft shorter notes when a trail’s notes get long', 'Claude rewrites them shorter, with the model of background runs, and the draft waits on the trail. The notes change only if you take it. <b>Condense</b> on a trail does the same when you ask.')}
+      <div class="field"><label>Notes are long past</label><div class="inline"><input type="number" id="set-condense-words" min="200" max="20000" step="100" value="${longNotesWords()}" style="flex:none;width:110px"><span class="help" style="margin:0">words</span></div></div>
+    </section>
     <section class="set-group"><h3>Updates</h3>
       ${toggle('set-updates', c.updates.check, 'Check for updates automatically', 'Stroll checks its git repository every few hours.')}
       <div class="actions"><button class="btn" data-set="check-updates">${ICON.download}Check now</button><button class="btn ghost" data-set="whats-new">${ICON.sparkle}What’s new</button></div>
@@ -1984,6 +2098,12 @@ function renderSettings(header, panel) {
   bind('#set-connectors', 'change', e => save({ background: { includeConnectors: e.target.checked } }));
   bind('#set-model', 'change', e => save({ background: { model: e.target.value.trim() || null } }));
   bind('#set-extra-rules', 'change', e => save({ background: { extraAllowedTools: e.target.value.split('\n').map(l => l.trim()).filter(Boolean) } }));
+  bind('#set-auto-condense', 'change', e => save({ trails: { autoCondense: e.target.checked } }));
+  bind('#set-condense-words', 'change', e => {
+    const n = Math.min(20000, Math.max(200, Math.round(Number(e.target.value)) || 800));
+    e.target.value = n;
+    save({ trails: { condenseAtWords: n } });
+  });
   bind('#set-updates', 'change', e => save({ updates: { check: e.target.checked } }));
   bind('[data-set="whats-new"]', 'click', async () => {
     const info = await api.invoke('app:whatsNew', true);
