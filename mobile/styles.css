@@ -124,6 +124,14 @@ button.row:active { background: var(--bg-hover); }
 /* dictation: the microphone, and the line that says it's listening */
 .mic { flex: none; display: grid; place-items: center; width: 46px; height: 46px; padding: 0; border-radius: 12px; border: 1px solid var(--line); background: var(--bg-raised); color: var(--text-2); }
 .mic svg { width: 22px; height: 22px; fill: currentColor; }
+.mic { position: relative; }
+.mic .tag { position: absolute; right: 4px; bottom: 2px; font: 650 8.5px var(--font); letter-spacing: 0.3px; color: var(--text-3); }
+.mic.on .tag { color: inherit; }
+/* choosing the languages to dictate in */
+.sheet-card.tall { max-height: 86vh; grid-template-rows: auto auto auto minmax(0, 1fr) auto; }
+.lang-list label[hidden] { display: none; }
+.lang-list { overflow-y: auto; overscroll-behavior: contain; margin: 0 -6px; padding: 0 6px; border-top: 1px solid var(--line-soft); border-bottom: 1px solid var(--line-soft); }
+.lang-list .switch span { color: var(--text); font-size: 15px; }
 .mic.on { background: var(--red-soft); border-color: rgba(248, 81, 73, 0.55); color: #ff8a83; animation: listening 1.4s infinite; }
 @keyframes listening { 50% { box-shadow: 0 0 0 5px var(--red-soft); } }
 .actions .mic { flex: none; }

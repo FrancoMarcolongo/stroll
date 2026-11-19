@@ -2,6 +2,13 @@
 
 Stroll shows the new sections here once, after an update. **Settings › Updates › What's new** shows them all again.
 
+## 0.13.1 — 2026-11-19
+
+### Dictation on the phone, in your languages
+- **Choose the languages you dictate in.** A phone's recogniser hears one language at a time and can't tell which you're speaking, so until now it listened in the phone's own language only. **Change language**, on the line above the message box while it listens, lists them: tick the ones you speak.
+- **One tap switches between them** while you dictate, keeping what's already in the box. The microphone shows which one it will hear (EN, ES).
+- The last lines of the phone's home page say the languages chosen, with **Change**.
+
 ## 0.13.0 — 2026-11-19
 
 ### On the phone

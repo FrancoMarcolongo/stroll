@@ -273,7 +273,8 @@
     const notes = { on: '<p>This phone is notified when something needs you. <button class="linkish" data-act="notify-off">Turn off</button></p>',
       off: '<button class="btn wide" data-act="notify-on">Notify me when something needs me</button>',
       blocked: '<p>Notifications are blocked for Stroll in this phone’s settings.</p>' }[S.notify] || '';
-    setHtml($('#foot'), `${notes}${offerApp ? '<a class="btn wide link" href="stroll.apk" download>Get the Android app</a>' : ''}<p>Remote access to ${esc(computer())}${link.ready?.version ? `, Stroll ${esc(link.ready.version)}` : ''}. It has to be on and awake.</p>
+    const dictation = Recognition ? `<p>Dictation in ${esc(voiceLangs().map(langName).join(', '))}. <button class="linkish" data-act="mic-langs">Change</button></p>` : '';
+    setHtml($('#foot'), `${notes}${dictation}${offerApp ? '<a class="btn wide link" href="stroll.apk" download>Get the Android app</a>' : ''}<p>Remote access to ${esc(computer())}${link.ready?.version ? `, Stroll ${esc(link.ready.version)}` : ''}. It has to be on and awake.</p>
       <button class="linkish" data-act="forget">Forget this computer</button>`);
   }
 
@@ -736,13 +737,20 @@
   // to the computer when it's sent, like anything typed. The first time, the phone says so.
   const Recognition = self.SpeechRecognition || self.webkitSpeechRecognition;
   const MIC = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15a3.5 3.5 0 0 0 3.5-3.5v-5a3.5 3.5 0 0 0-7 0v5A3.5 3.5 0 0 0 12 15Zm6-3.5a6 6 0 0 1-12 0H4.5a7.5 7.5 0 0 0 6.75 7.46V21.5h1.5v-2.54a7.5 7.5 0 0 0 6.75-7.46H18Z"/></svg>';
-  const micButton = () => (Recognition ? `<button type="button" class="mic" data-act="mic" aria-label="Dictate" aria-pressed="false">${MIC}</button>` : '');
+  const micButton = () => (Recognition ? `<button type="button" class="mic" data-act="mic" aria-label="Dictate" aria-pressed="false">${MIC}<span class="tag">${esc(langCode(voiceLang()))}</span></button>` : '');
   const stored = (key, value) => {
     try { if (value === undefined) return localStorage.getItem(key); localStorage.setItem(key, value); } catch (_) { /* no storage: asked again next time */ }
     return null;
   };
+  // A recogniser hears one language at a time and can't tell which is being spoken, so the
+  // languages are the user's to choose (kept on this phone), and one tap switches between them.
+  // What's offered: the ones Chrome's recogniser knows that people are likeliest to want.
+  const LANGS = ['en-US', 'en-GB', 'en-AU', 'en-CA', 'en-IN', 'en-IE', 'en-NZ', 'en-ZA', 'es-AR', 'es-BO', 'es-CL', 'es-CO', 'es-CR', 'es-EC', 'es-ES', 'es-MX', 'es-PE', 'es-PY', 'es-US', 'es-UY', 'es-VE',
+    'pt-BR', 'pt-PT', 'fr-FR', 'fr-CA', 'de-DE', 'it-IT', 'nl-NL', 'ca-ES', 'eu-ES', 'gl-ES', 'sv-SE', 'nb-NO', 'da-DK', 'fi-FI', 'pl-PL', 'cs-CZ', 'sk-SK', 'hu-HU', 'ro-RO', 'bg-BG', 'hr-HR', 'sr-RS', 'sl-SI',
+    'el-GR', 'tr-TR', 'ru-RU', 'uk-UA', 'he-IL', 'ar-SA', 'ar-EG', 'hi-IN', 'bn-IN', 'id-ID', 'ms-MY', 'vi-VN', 'th-TH', 'fil-PH', 'ja-JP', 'ko-KR', 'zh-CN', 'zh-TW', 'zh-HK'];
+  const isLang = tag => typeof tag === 'string' && /^[a-z]{2,3}(-[A-Za-z0-9]{2,8})*$/.test(tag);
   // The languages this phone is set to, one of each, the most exact form of it ("es-AR", "en-US").
-  function voiceLangs() {
+  function phoneLangs() {
     const found = new Map();
     for (const tag of (navigator.languages?.length ? navigator.languages : [navigator.language || 'en-US'])) {
       const base = tag.split('-')[0];
@@ -750,8 +758,49 @@
     }
     return [...found.values()];
   }
+  // The languages to dictate in: the ones chosen here, or the phone's own until some are.
+  function voiceLangs() {
+    try {
+      const chosen = JSON.parse(stored('stroll.dictateLangs') || 'null');
+      if (Array.isArray(chosen) && chosen.length && chosen.every(isLang)) return chosen;
+    } catch (_) { /* not a list: the phone's */ }
+    return phoneLangs();
+  }
+  // The one it listens in now: the last one used.
+  function voiceLang() {
+    const langs = voiceLangs();
+    return langs.includes(stored('stroll.dictateLang')) ? stored('stroll.dictateLang') : langs[0];
+  }
   function langName(tag) {
     try { return new Intl.DisplayNames(['en'], { type: 'language', languageDisplay: 'standard' }).of(tag); } catch (_) { return tag; }
+  }
+  const langCode = tag => tag.split('-')[0].toUpperCase();
+  // The microphones on screen, and the home page's line, say the language as it is now.
+  function showLang() {
+    for (const tag of document.querySelectorAll('.mic .tag')) tag.textContent = langCode(voiceLang());
+    if (S.data && S.view.type === 'home') render();
+  }
+  function langSheet() {
+    return new Promise(resolve => {
+      const el = $('#sheet');
+      const chosen = voiceLangs();
+      const first = [...new Set([...chosen, ...phoneLangs()])]; // the chosen ones and the phone's own lead the list
+      const rest = LANGS.filter(t => !first.includes(t)).sort((a, b) => langName(a).localeCompare(langName(b)));
+      el.innerHTML = `<div class="sheet-card tall"><h2>Dictation languages</h2>
+        <p>Tick the ones you speak. The microphone listens in one at a time; the line above the message box switches between them.</p>
+        <div class="field"><input type="search" class="lang-find" placeholder="Search" aria-label="Search languages" autocapitalize="off" autocomplete="off" enterkeyhint="search"></div>
+        <div class="lang-list">${[...first, ...rest].map(t => `<label class="switch"><input type="checkbox" value="${esc(t)}" ${chosen.includes(t) ? 'checked' : ''}><span>${esc(langName(t))}</span></label>`).join('')}</div>
+        <div class="actions"><button class="btn" data-no>Cancel</button><button class="btn primary" data-yes>Done</button></div></div>`;
+      el.className = 'show';
+      const done = answer => { el.className = ''; el.innerHTML = ''; resolve(answer); };
+      el.querySelector('.lang-find').oninput = e => {
+        const q = e.target.value.trim().toLowerCase();
+        for (const row of el.querySelectorAll('.lang-list label')) row.hidden = Boolean(q) && !row.textContent.toLowerCase().includes(q);
+      };
+      el.querySelector('[data-yes]').onclick = () => { const picked = [...el.querySelectorAll('.lang-list input:checked')].map(i => i.value); done(picked.length ? picked : null); };
+      el.querySelector('[data-no]').onclick = () => done(null);
+      el.onclick = e => { if (e.target === el) done(null); };
+    });
   }
   const VOICE_ERRORS = {
     'not-allowed': 'The microphone is blocked for Stroll in this phone’s settings.',
@@ -782,9 +831,9 @@
   function voiceNote(v) {
     const langs = voiceLangs();
     const next = langs[(langs.indexOf(v.lang) + 1) % langs.length];
-    v.note.innerHTML = langs.length > 1
-      ? `Listening in ${esc(langName(v.lang))}. <button type="button" class="linkish" data-act="mic-lang">Switch to ${esc(langName(next))}</button>`
-      : 'Listening… Tap the microphone when you’re done.';
+    v.note.innerHTML = `Listening in ${esc(langName(v.lang))}. ${langs.length > 1 && next !== v.lang
+      ? `<button type="button" class="linkish" data-act="mic-lang">Switch to ${esc(langName(next))}</button> · <button type="button" class="linkish" data-act="mic-langs">Languages</button>`
+      : '<button type="button" class="linkish" data-act="mic-langs">Change language</button>'}`;
   }
   // Puts everything back as it was, at once. The text heard so far stays in the box.
   function voiceDrop(error) {
@@ -815,8 +864,7 @@
   function voiceListen(button) {
     const form = button.closest('form');
     const box = form.elements.text;
-    const langs = voiceLangs();
-    const lang = langs.includes(stored('stroll.dictateLang')) ? stored('stroll.dictateLang') : langs[0];
+    const lang = voiceLang();
     const rec = new Recognition();
     rec.lang = lang;
     rec.interimResults = true; // the words show as they're said
@@ -867,7 +915,7 @@
     }
     if (stored('stroll.dictateOk') !== '1') {
       const yes = await confirmSheet({ title: 'Dictate with this phone’s microphone?',
-        body: 'This phone’s browser turns what you say into text. In Chrome that means the audio goes to Google’s speech service; Stroll doesn’t record or keep it. The text is put in the box, and nothing goes to Claude until you send it.',
+        body: `This phone’s browser turns what you say into text. In Chrome that means the audio goes to Google’s speech service; Stroll doesn’t record or keep it. The text is put in the box, and nothing goes to Claude until you send it. It listens in ${langName(voiceLang())}; the line above the box changes that.`,
         confirm: 'Dictate' });
       if (!yes) return;
       stored('stroll.dictateOk', '1');
@@ -880,7 +928,23 @@
     const langs = voiceLangs();
     stored('stroll.dictateLang', langs[(langs.indexOf(v.lang) + 1) % langs.length]);
     voiceDrop();
+    showLang();
     voiceListen(v.button);
+  }
+  // Choosing the languages, from the line above the box or from the home page. A microphone
+  // that was listening goes on listening after, in the language just added if there is one.
+  async function voiceChooseLangs() {
+    const button = V?.button;
+    voiceDrop();
+    const before = voiceLangs();
+    const picked = await langSheet();
+    if (picked) {
+      stored('stroll.dictateLangs', JSON.stringify(picked));
+      const added = picked.filter(t => !before.includes(t));
+      if (added.length === 1) stored('stroll.dictateLang', added[0]);
+      showLang();
+    }
+    if (button?.isConnected) voiceListen(button);
   }
   // Leaving the screen, or the app, ends it.
   document.addEventListener('visibilitychange', () => { if (document.visibilityState !== 'visible') voiceDrop(); });
@@ -971,6 +1035,7 @@
     else if (act === 'fit-here') takeSize();
     else if (act === 'mic') voiceToggle(el);
     else if (act === 'mic-lang') voiceNextLang();
+    else if (act === 'mic-langs') voiceChooseLangs();
     else if (act === 'notify-on') {
       try {
         if (await Notification.requestPermission() !== 'granted') { toast('Notifications are blocked for Stroll on this phone', true); return; }
