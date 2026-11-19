@@ -2,6 +2,17 @@
 
 Stroll shows the new sections here once, after an update. **Settings › Updates › What's new** shows them all again.
 
+## 0.13.0 — 2026-11-19
+
+### On the phone
+- **Dictate a message.** A session's message box and **New session** have a microphone: tap it, talk, and the words land in the box as you say them. It keeps listening through pauses until you tap it again or send. Nothing goes to Claude until you press Send.
+- **It hears in the phone's languages.** With more than one, the line above the box switches between them and remembers the last.
+- **The speech is recognised by the phone's browser, not by Stroll.** In Chrome that means the audio goes to Google's speech service; the app says so the first time. The text then travels to your computer encrypted, like anything typed.
+- **A session scrolls like the rest of the phone.** The text follows your finger to the pixel, a flick glides on and slows down, and a touch stops it. Before, it moved two lines at a time and stopped the moment you let go.
+- With Claude Code in full-screen mode the computer still redraws each line you scroll to, so on a slow connection the lines coming into view arrive a moment after the rest has moved.
+
+Nothing to install on the phone: the app loads the new version the next time it's opened.
+
 ## 0.12.0 — 2026-11-18
 
 ### Markdown editors and @ file references

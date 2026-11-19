@@ -113,6 +113,7 @@
   const focusOf = view => (view.type === 'run' || view.type === 'session' ? view : { type: 'home' });
   function show() {
     S.view = parseHash();
+    voiceDrop();
     if (S.view.type !== 'session') closeTerminal();
     link.send('ui:focus', focusOf(S.view));
     render(true);
@@ -360,8 +361,268 @@
   function closeTerminal() {
     if (!T) return;
     T.observer.disconnect();
+    T.scroll.stop();
     T.term.dispose();
     T = null;
+  }
+
+  // --- a finger on the terminal ---
+  // It scrolls like a page on a phone: the text follows the finger to the pixel and glides on
+  // when it's let go. A terminal only moves by whole rows, so the part of a row left over is
+  // made up by shifting the rows on the screen.
+  // A terminal with its own scrollback is scrolled right here. Claude Code in full-screen mode
+  // keeps the scrollback itself and moves when it's told the mouse wheel turned: the turns go
+  // to the computer and the rows are shifted here at once, ahead of the redraw. Each redraw is
+  // then compared with the screen before it to see how far the text really moved (the app
+  // decides that: fast turns move more than a row each, and at either end nothing moves), and
+  // the shift shrinks by that much.
+  const SLOP = 6; // px a finger travels before it's scrolling
+  const GLIDE_MS = 400; // a flick fades out over about this long
+  const LEAD_ROWS = 6; // the rows are shifted at most this far ahead of the computer's redraw
+  const FLIGHT_ROWS = 10; // wheel turns sent and not seen back yet, at most
+  const STALL_MS = 450; // asked, and nothing moved for this long: there's no more that way
+  const clamp = (n, lo, hi) => Math.max(lo, Math.min(hi, n));
+
+  function fingerScroll(el, term, id) {
+    // Everything counts the same way: positive is towards older output (the text moves down).
+    let want = 0; // px: where the finger and the glide have put the text
+    let done = 0; // rows the text has moved, as drawn
+    let sent = 0; // rows asked of the app, as wheel turns
+    let queued = 0; // rows scrolled here and not drawn yet
+    let velocity = 0; // px/ms of the glide
+    let dir = 0; // which way it was last pushed
+    let back = 0; // px the finger has gone the other way since
+    let edge = 0; // the way that had no more, last time (the app's history; a terminal here knows its ends)
+    let wheel = false; // the app scrolls itself, by the mouse wheel
+    let touch = null;
+    let frame = 0;
+    let last = 0;
+    let cell = 14;
+    let shifted = false;
+    let snap = null; // the rows as last drawn, to tell how far a redraw moved them
+    let unsure = 0;
+    const fixed = { top: 0, bottom: 0 }; // rows the app keeps in place: its input box, its status line
+    const known = { top: false, bottom: false };
+    const doubt = { top: null, bottom: null };
+    const at = { col: 1, line: 1 }; // where the wheel is reported to be
+    let lastSend = 0;
+    let lastMove = 0;
+    let asked = 0;
+    let rtt = 150;
+
+    const rowsNow = () => {
+      const b = term.buffer.active;
+      const out = [];
+      for (let y = 0; y < term.rows; y += 1) out.push(b.getLine(b.viewportY + y)?.translateToString(true) ?? '');
+      return out;
+    };
+    function rest() { want = 0; done = 0; sent = 0; queued = 0; velocity = 0; snap = null; unsure = 0; }
+
+    // The rows are drawn where the finger has them: shifted by what hasn't been scrolled yet.
+    // The app's own rows stay put, over the ones sliding under them.
+    function paint() {
+      const rows = term.element?.querySelector('.xterm-rows');
+      if (!rows) return;
+      let off = clamp(want - done * cell, -LEAD_ROWS * cell, LEAD_ROWS * cell);
+      // Until the app's first redraw has shown which rows it keeps in place, nothing is shifted:
+      // its input box would be dragged along.
+      if (Math.abs(off) < 0.5 || (wheel && !known.bottom)) off = 0;
+      if (!off && !shifted) return;
+      shifted = Boolean(off);
+      rows.style.transform = off ? `translateY(${off.toFixed(1)}px)` : '';
+      const held = off ? `translateY(${(-off).toFixed(1)}px)` : '';
+      const n = rows.childElementCount;
+      for (let y = 0; y < n; y += 1) {
+        const row = rows.children[y];
+        const hold = Boolean(off) && wheel && (y < fixed.top || y >= n - fixed.bottom);
+        if (row.classList.contains('held') !== hold) row.classList.toggle('held', hold);
+        if (row.style.transform !== (hold ? held : '')) row.style.transform = hold ? held : '';
+      }
+    }
+
+    // How many rows the text moved between two screens, or null when it can't be told (half a
+    // redraw, or another screen altogether). Of two answers as good, the one closer to what
+    // was asked for.
+    function movedBy(before, after, expected) {
+      const n = after.length;
+      const top = fixed.top;
+      const bottom = n - fixed.bottom;
+      const span = Math.max(0, Math.min(bottom - top - 3, FLIGHT_ROWS * 2 + 4));
+      let best = null;
+      for (let d = -span; d <= span; d += 1) {
+        let same = 0;
+        let could = 0;
+        for (let y = Math.max(top, top + d); y < Math.min(bottom, bottom + d); y += 1) {
+          const line = before[y - d];
+          if (!line.trim()) continue;
+          could += 1;
+          if (line === after[y]) same += 1;
+        }
+        if (!best || same > best.same || (same === best.same && Math.abs(d - expected) < Math.abs(best.d - expected))) best = { d, same, could };
+      }
+      if (!best || best.same < 3 || best.same < 0.55 * best.could) return null;
+      // The rows that came along, over the whole screen: what's beyond them is the app's own.
+      best.lo = n;
+      best.hi = -1;
+      for (let y = Math.max(0, best.d); y < Math.min(n, n + best.d); y += 1) {
+        if (before[y - best.d].trim() && before[y - best.d] === after[y]) { best.lo = Math.min(best.lo, y); best.hi = y; }
+      }
+      return best;
+    }
+    // Fewer rows of the app's own are believed at once, more only when seen three times running:
+    // a blank line that moved looks just like one that stayed.
+    function learn(side, count) {
+      if (!known[side] || count <= fixed[side]) { fixed[side] = count; known[side] = true; doubt[side] = null; return; }
+      const d = doubt[side] || { n: 0, least: count };
+      doubt[side] = d;
+      d.n += 1;
+      d.least = Math.min(d.least, count);
+      if (d.n >= 3) { fixed[side] = d.least; doubt[side] = null; }
+    }
+
+    const rendered = term.onRender(() => {
+      if (!wheel) { // rows scrolled here are on screen now: the shift gives way to them
+        if (queued) { done += queued; queued = 0; paint(); }
+        return;
+      }
+      if (!snap) return; // nobody is scrolling
+      const now = rowsNow();
+      const t = performance.now();
+      const flight = sent - done;
+      const m = snap.length === now.length ? movedBy(snap, now, flight) : { d: 0 };
+      if (!m) { // wait for the rest of the redraw before deciding
+        if (!unsure) unsure = t;
+        if (t - unsure > 250) { snap = now; unsure = 0; }
+        return;
+      }
+      unsure = 0;
+      snap = now;
+      if (!m.d) return;
+      if (flight && Math.sign(m.d) === Math.sign(flight)) {
+        done += m.d;
+        if ((done - sent) * m.d > 0) sent = done; // it moved further than it was asked to
+        rtt = 0.7 * rtt + 0.3 * (t - asked);
+        asked = t;
+        lastMove = t;
+        edge = 0;
+        if (m.d > 0) learn('bottom', now.length - 1 - m.hi); else learn('top', m.lo);
+        paint();
+      } else if (Math.sign(m.d) === -edge) edge = 0; // something else moved it away from that end
+    });
+
+    // The app's history: wheel turns for the rows the finger is ahead by, a few at a time.
+    function turn(now) {
+      let flight = sent - done;
+      if (flight && now - Math.max(lastSend, lastMove) > Math.max(STALL_MS, 3 * rtt)) {
+        edge = Math.sign(flight); // nothing came of it: that's the end, or the line is very slow
+        sent = done;
+        velocity = 0;
+        flight = 0;
+      }
+      want = clamp(want, (done - FLIGHT_ROWS) * cell, (done + FLIGHT_ROWS) * cell); // never far from what's on screen
+      let need = Math.round(want / cell) - sent;
+      if (need && Math.sign(need) !== dir) need = 0; // the app went further than asked: the wheel isn't turned back for it
+      if (need && Math.sign(need) === edge && !touch) need = 0; // let go at the end: nothing more to ask for
+      need = Math.sign(need) * Math.min(Math.abs(need), Math.max(0, FLIGHT_ROWS - Math.abs(flight)), 8);
+      if (!need || now - lastSend < 30 || link.state !== 'online') return Boolean(flight) || (Boolean(need) && link.state === 'online');
+      if (!flight) asked = now;
+      // Wheel up (64) or down (65) at the cell under the finger, as the terminal would report it.
+      link.send('session:write', id, `\x1b[<${need > 0 ? 64 : 65};${at.col};${at.line}M`.repeat(Math.abs(need)));
+      sent += need;
+      lastSend = now;
+      return true;
+    }
+    // A terminal with its own scrollback: its rows are scrolled as the finger passes them.
+    function scrollHere(now) {
+      if (queued && now - lastMove > 120) { done += queued; queued = 0; } // not drawn (out of sight): don't wait for it
+      const b = term.buffer.active;
+      const here = done + queued;
+      const least = (here - (b.baseY - b.viewportY)) * cell;
+      const most = (here + b.viewportY) * cell;
+      if (want < least || want > most) { want = clamp(want, least, most); velocity = 0; } // the top or the bottom of what there is
+      const n = Math.round(want / cell) - here;
+      if (n) { term.scrollLines(-n); queued += n; lastMove = now; }
+      return queued !== 0;
+    }
+
+    function tick(now) {
+      frame = 0;
+      const dt = clamp(now - last, 0, 50);
+      last = now;
+      if (!touch && velocity) {
+        want += velocity * dt;
+        velocity *= Math.exp(-dt / GLIDE_MS);
+        if (Math.abs(velocity) < 0.02) velocity = 0;
+      }
+      const busy = wheel ? turn(now) : scrollHere(now);
+      let again = Boolean(velocity) || busy;
+      if (!touch && !velocity && !busy) { // let go, and nothing on its way: come to rest on whole rows
+        const gap = want - done * cell;
+        if (Math.abs(gap) < 0.5) rest();
+        else { want = done * cell + gap * Math.exp(-dt / 60); again = true; }
+      }
+      paint();
+      if (again) frame = requestAnimationFrame(tick);
+    }
+    function run() {
+      if (frame) return;
+      last = performance.now();
+      frame = requestAnimationFrame(tick);
+    }
+
+    el.addEventListener('touchstart', e => {
+      if (e.touches.length !== 1) { touch = null; return; }
+      const p = e.touches[0];
+      const mode = term.modes.mouseTrackingMode !== 'none';
+      if (mode !== wheel) { rest(); edge = 0; wheel = mode; }
+      const box = (term.element?.querySelector('.xterm-screen') || el).getBoundingClientRect();
+      cell = box.height / term.rows || 14;
+      at.col = clamp(Math.floor((p.clientX - box.left) / (box.width / term.cols)) + 1, 1, term.cols);
+      at.line = clamp(Math.floor((p.clientY - box.top) / cell) + 1, fixed.top + 1, Math.max(fixed.top + 1, term.rows - fixed.bottom));
+      velocity = 0; // a touch stops the glide where it is
+      if (wheel && !snap) snap = rowsNow();
+      touch = { y: p.clientY, moved: false, samples: [[e.timeStamp, p.clientY]] };
+    }, { passive: true });
+    el.addEventListener('touchmove', e => {
+      if (!touch || e.touches.length !== 1) return;
+      const y = e.touches[0].clientY;
+      if (!touch.moved) {
+        if (Math.abs(y - touch.y) < SLOP) return;
+        touch.moved = true; // the scroll starts from here: no jump
+        touch.y = y;
+        touch.samples = [[e.timeStamp, y]];
+        return;
+      }
+      const dy = y - touch.y;
+      touch.y = y;
+      touch.samples.push([e.timeStamp, y]);
+      while (touch.samples.length > 2 && e.timeStamp - touch.samples[0][0] > 100) touch.samples.shift();
+      if (!dy) return;
+      // A finger trembles: it has turned round only once it has gone a little way back.
+      if (!dir || Math.sign(dy) === dir) { dir = Math.sign(dy); back = 0; } else { back += Math.abs(dy); if (back > 4) { dir = Math.sign(dy); back = 0; } }
+      want += dy * (wheel && edge === Math.sign(dy) ? 0.3 : 1); // against an end it gives a little, no more
+      run();
+    }, { passive: true });
+    const lift = e => {
+      if (!touch) return;
+      const t = touch;
+      touch = null;
+      if (t.moved && e.type === 'touchend') {
+        const [t0, y0] = t.samples[0];
+        const [t1, y1] = t.samples[t.samples.length - 1];
+        const v = t1 > t0 && e.timeStamp - t1 < 80 ? (y1 - y0) / (t1 - t0) : 0; // a finger that stopped first doesn't flick
+        if (Math.abs(v) >= 0.15 && !(wheel && edge === Math.sign(v))) { velocity = clamp(v, -4, 4); dir = Math.sign(v); back = 0; }
+      }
+      run();
+    };
+    el.addEventListener('touchend', lift, { passive: true });
+    el.addEventListener('touchcancel', lift, { passive: true });
+
+    return {
+      stop() { cancelAnimationFrame(frame); rendered.dispose(); },
+      // The screen was replaced (reconnected, another size): start over from what's there.
+      reset() { rest(); edge = 0; paint(); },
+    };
   }
 
   // A session's terminal has one size. Opening it here gives it this screen's; when the
@@ -388,6 +649,7 @@
     try { buf = await link.invoke('session:buffer', t.id); } catch (_) { return; } // retried when it connects again
     if (T !== t) return;
     t.term.reset();
+    t.scroll.reset();
     t.term.write(`${buf.data || ''}${buf.modes || ''}`, () => {
       t.lastSeq = buf.seq;
       t.ready = true;
@@ -409,30 +671,7 @@
     let settle = null;
     T.observer = new ResizeObserver(() => { clearTimeout(settle); settle = setTimeout(() => { if (T?.own && T.id === id) takeSize(); }, 150); });
     T.observer.observe(el);
-    // A finger scrolls back through the output. Claude Code draws the whole screen itself and
-    // keeps no scrollback in the terminal: it scrolls when it's told the mouse wheel turned, so
-    // that's what a drag sends it. A terminal with its own scrollback is scrolled directly.
-    let lastY = null;
-    let carry = 0;
-    el.addEventListener('touchstart', e => { lastY = e.touches[0].clientY; carry = 0; }, { passive: true });
-    el.addEventListener('touchmove', e => {
-      if (lastY === null || e.touches.length !== 1) return;
-      const screen = term.element?.querySelector('.xterm-screen');
-      const box = (screen || el).getBoundingClientRect();
-      const cell = box.height / term.rows || 16;
-      const wheel = term.modes.mouseTrackingMode !== 'none';
-      const step = wheel ? cell * 2 : cell; // an app moves a few lines per turn of the wheel
-      carry += lastY - e.touches[0].clientY;
-      lastY = e.touches[0].clientY;
-      const steps = Math.trunc(carry / step);
-      if (!steps) return;
-      carry -= steps * step;
-      if (!wheel) { term.scrollLines(steps); return; }
-      // Wheel down (65) or up (64) at the cell under the finger, as the terminal would report it.
-      const col = Math.min(term.cols, Math.max(1, Math.floor((e.touches[0].clientX - box.left) / (box.width / term.cols)) + 1));
-      const line = Math.min(term.rows, Math.max(1, Math.floor((e.touches[0].clientY - box.top) / cell) + 1));
-      link.send('session:write', id, `\x1b[<${steps > 0 ? 65 : 64};${col};${line}M`.repeat(Math.min(Math.abs(steps), 6)));
-    }, { passive: true });
+    T.scroll = fingerScroll(el, term, id);
     takeSize();
     loadBuffer();
   }
@@ -457,7 +696,7 @@
         <div id="s-size"></div>
         <div id="term"></div>
         <div id="keys">${KEYS.map(([label], i) => `<button type="button" data-key="${i}">${label}</button>`).join('')}</div>
-        <form id="say" autocomplete="off"><textarea name="text" rows="1" placeholder="Message Claude" enterkeyhint="send"></textarea><button class="btn primary" type="submit">Send</button></form>
+        <form id="say" autocomplete="off"><textarea name="text" rows="1" placeholder="Message Claude" enterkeyhint="send"></textarea>${micButton()}<button class="btn primary" type="submit">Send</button></form>
       </div>`);
       $('#keys').addEventListener('click', e => {
         const key = KEYS[e.target.closest('[data-key]')?.dataset.key];
@@ -466,9 +705,12 @@
         link.send('session:write', T.id, key[1]);
       });
       const box = $('#say').elements.text;
-      box.addEventListener('input', () => { box.rows = Math.min(5, Math.max(1, box.value.split('\n').length)); });
+      // The box grows with what's in it, typed or spoken, up to five lines; the end stays in view.
+      const fitBox = () => { box.style.height = 'auto'; box.style.height = `${Math.min(box.scrollHeight + 2, 132)}px`; box.scrollTop = box.scrollHeight; };
+      box.addEventListener('input', fitBox);
       $('#say').addEventListener('submit', e => {
         e.preventDefault();
+        voiceDrop(); // what was heard so far is in the box
         const text = box.value.replace(/\s+$/, '');
         if (!text || !T || link.state !== 'online') return;
         // Several lines go in as one paste, so they stay one message; Enter follows once the
@@ -477,7 +719,7 @@
         const id = T.id;
         setTimeout(() => link.send('session:write', id, '\r'), 120);
         box.value = '';
-        box.rows = 1;
+        fitBox();
         T.term.scrollToBottom();
       });
       openTerminal(s.id);
@@ -488,6 +730,161 @@
     renderSizeNote();
   }
 
+  // --- dictation: a message can be spoken instead of typed ---
+  // The words are recognised by this phone's browser, not by Stroll: in Chrome the audio goes
+  // to Google's speech service. Only the text that comes back is put in the box, and it goes
+  // to the computer when it's sent, like anything typed. The first time, the phone says so.
+  const Recognition = self.SpeechRecognition || self.webkitSpeechRecognition;
+  const MIC = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15a3.5 3.5 0 0 0 3.5-3.5v-5a3.5 3.5 0 0 0-7 0v5A3.5 3.5 0 0 0 12 15Zm6-3.5a6 6 0 0 1-12 0H4.5a7.5 7.5 0 0 0 6.75 7.46V21.5h1.5v-2.54a7.5 7.5 0 0 0 6.75-7.46H18Z"/></svg>';
+  const micButton = () => (Recognition ? `<button type="button" class="mic" data-act="mic" aria-label="Dictate" aria-pressed="false">${MIC}</button>` : '');
+  const stored = (key, value) => {
+    try { if (value === undefined) return localStorage.getItem(key); localStorage.setItem(key, value); } catch (_) { /* no storage: asked again next time */ }
+    return null;
+  };
+  // The languages this phone is set to, one of each, the most exact form of it ("es-AR", "en-US").
+  function voiceLangs() {
+    const found = new Map();
+    for (const tag of (navigator.languages?.length ? navigator.languages : [navigator.language || 'en-US'])) {
+      const base = tag.split('-')[0];
+      if (!found.has(base) || (!found.get(base).includes('-') && tag.includes('-'))) found.set(base, tag);
+    }
+    return [...found.values()];
+  }
+  function langName(tag) {
+    try { return new Intl.DisplayNames(['en'], { type: 'language', languageDisplay: 'standard' }).of(tag); } catch (_) { return tag; }
+  }
+  const VOICE_ERRORS = {
+    'not-allowed': 'The microphone is blocked for Stroll in this phone’s settings.',
+    'service-not-allowed': 'This phone doesn’t let its browser dictate.',
+    'audio-capture': 'This phone has no microphone to listen with.',
+    network: 'Dictation needs this phone to be online.',
+  };
+  let V = null; // dictation going on: the recogniser, the box it writes in, what was there before and what has been said
+
+  // What has been said, from the recogniser's list of results. Browsers fill that list in two
+  // ways. Chrome on a computer gives settled sentences followed by the pieces it's still
+  // hearing. Chrome on Android gives every guess at the sentence as a result of its own,
+  // marked final with no confidence, each one the whole sentence again: only the last counts.
+  function spoken(results) {
+    const plain = t => t.toLowerCase().normalize('NFD').replace(/[^\p{L}\p{N} ]/gu, '').replace(/\s+/g, ' ').trim();
+    const join = (a, b) => (a && b && !/\s$/.test(a) && !/^\s/.test(b) ? `${a} ${b}` : a + b);
+    let settled = '';
+    let guess = '';
+    let hearing = '';
+    for (let i = 0; i < results.length; i += 1) {
+      const text = results[i][0].transcript;
+      if (!results[i].isFinal) hearing += text;
+      else if (!results[i][0].confidence) guess = text;
+      else { settled = plain(settled) && plain(text).startsWith(plain(settled)) ? text : join(settled, text); guess = ''; }
+    }
+    return join(join(settled, guess), hearing).trim();
+  }
+  function voiceNote(v) {
+    const langs = voiceLangs();
+    const next = langs[(langs.indexOf(v.lang) + 1) % langs.length];
+    v.note.innerHTML = langs.length > 1
+      ? `Listening in ${esc(langName(v.lang))}. <button type="button" class="linkish" data-act="mic-lang">Switch to ${esc(langName(next))}</button>`
+      : 'Listening… Tap the microphone when you’re done.';
+  }
+  // Puts everything back as it was, at once. The text heard so far stays in the box.
+  function voiceDrop(error) {
+    const v = V;
+    if (!v) return;
+    V = null;
+    clearTimeout(v.giveUp);
+    v.rec.onresult = null; v.rec.onerror = null; v.rec.onend = null;
+    try { v.rec.abort(); } catch (_) { /* already over */ }
+    v.button.classList.remove('on');
+    v.button.setAttribute('aria-pressed', 'false');
+    v.box.readOnly = false;
+    v.box.placeholder = v.placeholder;
+    v.note.remove();
+    if (error === 'no-speech') toast('Didn’t hear anything');
+    else if (error === 'language-not-supported') toast(`This phone can’t dictate in ${langName(v.lang)}.`, true);
+    else if (error && error !== 'aborted') toast(VOICE_ERRORS[error] || 'Dictation stopped working on this phone.', true);
+  }
+  // Done talking: the recogniser gets a moment to finish the last words.
+  function voiceStop() {
+    const v = V;
+    if (!v) return;
+    v.wanted = false;
+    v.button.classList.remove('on');
+    try { v.rec.stop(); } catch (_) { voiceDrop(); return; }
+    v.giveUp = setTimeout(() => { if (V === v) voiceDrop(); }, 1500);
+  }
+  function voiceListen(button) {
+    const form = button.closest('form');
+    const box = form.elements.text;
+    const langs = voiceLangs();
+    const lang = langs.includes(stored('stroll.dictateLang')) ? stored('stroll.dictateLang') : langs[0];
+    const rec = new Recognition();
+    rec.lang = lang;
+    rec.interimResults = true; // the words show as they're said
+    rec.continuous = true; // a pause doesn't end it, where the phone allows
+    rec.maxAlternatives = 1;
+    const note = document.createElement('p');
+    note.className = 'voice-note';
+    const v = { rec, form, box, button, note, lang, placeholder: box.placeholder, base: box.value.replace(/\s+$/, ''), said: '', error: null, wanted: true, startedAt: Date.now(), starts: 1, giveUp: null };
+    V = v;
+    rec.onresult = e => {
+      if (V !== v) return;
+      v.said = spoken(e.results);
+      box.value = [v.base, v.said].filter(Boolean).join(' ');
+      box.dispatchEvent(new Event('input', { bubbles: true }));
+    };
+    rec.onerror = e => { v.error = e.error; };
+    rec.onend = () => {
+      if (V !== v) return;
+      // Many phones stop listening at every pause. While the button is on and the last stretch
+      // heard something, it listens again; silence, an error or the button end it.
+      const heard = Boolean(v.said);
+      if (v.wanted && !v.error && heard && Date.now() - v.startedAt > 800 && v.starts < 40) {
+        v.base = box.value.replace(/\s+$/, '');
+        v.said = '';
+        v.startedAt = Date.now();
+        v.starts += 1;
+        try { rec.start(); return; } catch (_) { /* ends below */ }
+      }
+      // Silence after something was said just ends it; silence from the start is worth a word.
+      const silent = v.error === 'no-speech' || (!v.error && !heard);
+      voiceDrop(silent ? (v.wanted && v.starts === 1 ? 'no-speech' : null) : v.error);
+    };
+    button.classList.add('on');
+    button.setAttribute('aria-pressed', 'true');
+    box.readOnly = true; // the box is being written by voice: no keyboard over it meanwhile
+    box.placeholder = 'Listening…';
+    const anchor = button.parentElement === form ? form.firstChild : button.parentElement;
+    anchor.parentElement.insertBefore(note, anchor);
+    voiceNote(v);
+    try { rec.start(); } catch (_) { voiceDrop('start'); }
+  }
+  async function voiceToggle(button) {
+    if (V) {
+      const same = V.button === button;
+      if (same && V.wanted) { voiceStop(); return; }
+      voiceDrop();
+      if (same) return;
+    }
+    if (stored('stroll.dictateOk') !== '1') {
+      const yes = await confirmSheet({ title: 'Dictate with this phone’s microphone?',
+        body: 'This phone’s browser turns what you say into text. In Chrome that means the audio goes to Google’s speech service; Stroll doesn’t record or keep it. The text is put in the box, and nothing goes to Claude until you send it.',
+        confirm: 'Dictate' });
+      if (!yes) return;
+      stored('stroll.dictateOk', '1');
+    }
+    if (button.isConnected) voiceListen(button);
+  }
+  function voiceNextLang() {
+    const v = V;
+    if (!v) return;
+    const langs = voiceLangs();
+    stored('stroll.dictateLang', langs[(langs.indexOf(v.lang) + 1) % langs.length]);
+    voiceDrop();
+    voiceListen(v.button);
+  }
+  // Leaving the screen, or the app, ends it.
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState !== 'visible') voiceDrop(); });
+
   // --- a new session, started from here ---
   function renderNew(view, fresh) {
     if (!fresh && view.querySelector('#new-form')) return;
@@ -496,10 +893,11 @@
       <p class="meta">Starts Claude Code on ${esc(computer())}. It keeps going there whether or not this phone stays connected.</p>
       <label class="field"><span>Folder</span><select name="cwd">${dirs.map(d => `<option value="${esc(d)}">${esc(shortDir(d))}</option>`).join('')}</select></label>
       <label class="field"><span>First message</span><textarea name="text" rows="5" placeholder="What should Claude do?"></textarea></label>
-      <div class="actions bottom"><button class="btn primary" type="submit">Start session</button></div>
+      <div class="actions bottom">${micButton()}<button class="btn primary" type="submit">Start session</button></div>
     </form>`);
     $('#new-form').addEventListener('submit', async e => {
       e.preventDefault();
+      voiceDrop();
       const f = e.target.elements;
       const text = f.text.value.trim();
       const button = e.target.querySelector('[type=submit]');
@@ -571,6 +969,8 @@
     else if (act === 'retry') link.wake(true);
     else if (act === 'no-app') { try { localStorage.setItem('stroll.noAppPrompt', '1'); } catch (_) { /* asked again next time */ } render(); }
     else if (act === 'fit-here') takeSize();
+    else if (act === 'mic') voiceToggle(el);
+    else if (act === 'mic-lang') voiceNextLang();
     else if (act === 'notify-on') {
       try {
         if (await Notification.requestPermission() !== 'granted') { toast('Notifications are blocked for Stroll on this phone', true); return; }

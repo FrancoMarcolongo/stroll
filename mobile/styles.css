@@ -111,10 +111,25 @@ button.row:active { background: var(--bg-hover); }
 #s-size .linkish { padding: 0 0 0 4px; color: var(--accent); }
 #term { flex: 1; min-height: 0; padding: 4px 6px; overflow: hidden; touch-action: none; }
 #term.wide { overflow-x: auto; touch-action: pan-x; }
+/* Scrolling shifts the rows by the part of a row a finger is ahead (app.js, fingerScroll); the
+   rows the app keeps in place (its input box, its status line) are held over the ones sliding under. */
+#term .xterm-screen { overflow: hidden; }
+#term .xterm-rows { will-change: transform; }
+#term .xterm-rows > .held { position: relative; z-index: 1; background: var(--bg); }
 #keys { flex: none; display: flex; gap: 6px; padding: 6px 10px; overflow-x: auto; border-top: 1px solid var(--line-soft); scrollbar-width: none; }
 #keys button { flex: none; min-width: 46px; height: 40px; padding: 0 10px; border-radius: 9px; border: 1px solid var(--line); background: var(--bg-raised); font: 14px var(--mono); }
 #keys button:active { background: var(--bg-hover); }
-#say { flex: none; display: flex; align-items: flex-end; gap: 8px; padding: 4px 10px calc(10px + env(safe-area-inset-bottom)); }
+#say { flex: none; display: flex; flex-wrap: wrap; align-items: flex-end; gap: 8px; padding: 4px 10px calc(10px + env(safe-area-inset-bottom)); }
+#say textarea { flex: 1 1 0; }
+/* dictation: the microphone, and the line that says it's listening */
+.mic { flex: none; display: grid; place-items: center; width: 46px; height: 46px; padding: 0; border-radius: 12px; border: 1px solid var(--line); background: var(--bg-raised); color: var(--text-2); }
+.mic svg { width: 22px; height: 22px; fill: currentColor; }
+.mic.on { background: var(--red-soft); border-color: rgba(248, 81, 73, 0.55); color: #ff8a83; animation: listening 1.4s infinite; }
+@keyframes listening { 50% { box-shadow: 0 0 0 5px var(--red-soft); } }
+.actions .mic { flex: none; }
+.voice-note { flex: 0 0 100%; padding: 2px 4px; color: var(--text-2); font-size: 13px; }
+.voice-note .linkish { padding: 0 0 0 4px; color: var(--accent); font-size: 13px; }
+textarea[readonly] { border-color: rgba(248, 81, 73, 0.45); }
 #say.off { display: none; }
 #say textarea, .field textarea, .field select { flex: 1; min-width: 0; width: 100%; padding: 11px 14px; background: var(--bg-input); border: 1px solid var(--line); border-radius: 12px; outline: none; resize: none; font: inherit; color: inherit; line-height: 1.4; }
 #say textarea:focus, .field textarea:focus, .field select:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
