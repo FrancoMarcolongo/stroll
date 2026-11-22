@@ -77,7 +77,7 @@ button.main:active .title { color: var(--accent); }
 .pill.failed { background: var(--red-soft); color: #ff8a83; }
 .approval { display: grid; gap: 12px; padding: 16px; border-radius: 14px; background: linear-gradient(180deg, #2a2413, #1c1a14); border: 1px solid rgba(227, 160, 8, 0.45); }
 .approval h3 { margin: 0; font-size: 15px; font-weight: 650; text-transform: none; letter-spacing: 0; color: var(--text); }
-.approval pre, #wf-preview { font: 13px/1.5 var(--mono); white-space: pre-wrap; word-break: break-word; background: rgba(0, 0, 0, 0.3); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; max-height: 40vh; overflow: auto; }
+.approval pre, #wf-preview, #todo-form pre { font: 13px/1.5 var(--mono); white-space: pre-wrap; word-break: break-word; background: rgba(0, 0, 0, 0.3); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; max-height: 40vh; overflow: auto; }
 .actions { display: flex; gap: 10px; }
 .actions .btn { flex: 1; }
 .actions.bottom:empty { display: none; }
@@ -137,6 +137,8 @@ button.main:active .title { color: var(--accent); }
 .mic.on { background: var(--red-soft); border-color: rgba(248, 81, 73, 0.55); color: #ff8a83; animation: listening 1.4s infinite; }
 @keyframes listening { 50% { box-shadow: 0 0 0 5px var(--red-soft); } }
 .actions .mic { flex: none; }
+.help { color: var(--text-3); font-size: 12.5px; line-height: 1.45; }
+#todo-live { display: grid; gap: 10px; }
 .voice-note { flex: 0 0 100%; padding: 2px 4px; color: var(--text-2); font-size: 13px; }
 .voice-note .linkish { padding: 0 0 0 4px; color: var(--accent); font-size: 13px; }
 textarea[readonly] { border-color: rgba(248, 81, 73, 0.45); }

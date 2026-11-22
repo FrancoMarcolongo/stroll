@@ -45,6 +45,8 @@
   const run = id => S.data?.runs.find(r => r.id === id);
   const session = id => S.data?.sessions.find(s => s.id === id);
   const workflow = id => (S.data?.workflows || []).find(w => w.id === id);
+  const todo = id => S.data?.todos.find(t => t.id === id);
+  const trail = id => (S.data?.trails || []).find(t => t.id === id);
   const computer = () => link.ready?.name || link.computer?.name || 'your computer';
 
   function slotText(iso) {
@@ -103,7 +105,7 @@
   function parseHash() {
     if (location.hash === '#/new') return { type: 'new' };
     // #/new/<to-do id>: a session started for that to-do.
-    const m = location.hash.match(/^#\/(run|workflow|session|new)\/([\w-]+)$/);
+    const m = location.hash.match(/^#\/(run|workflow|session|todo|new)\/([\w-]+)$/);
     return m ? { type: m[1], id: m[2] } : { type: 'home' };
   }
   const hashOf = view => (view.type === 'home' ? '#/' : view.id ? `#/${view.type}/${view.id}` : `#/${view.type}`);
@@ -161,6 +163,7 @@
     if (S.view.type === 'run') renderRun(view);
     else if (S.view.type === 'workflow') renderWorkflow(view, fresh);
     else if (S.view.type === 'session') renderSession(view);
+    else if (S.view.type === 'todo') renderTodo(view, fresh);
     else if (S.view.type === 'new') renderNew(view, fresh);
     else renderHome(view);
   }
@@ -168,7 +171,7 @@
   function barHtml() {
     const back = S.view.type !== 'home' && S.data ? '<button class="back" data-act="back" aria-label="Back">‹</button>' : '';
     const title = S.view.type === 'run' ? esc(run(S.view.id)?.title || 'Run') : S.view.type === 'workflow' ? esc(workflow(S.view.id)?.name || 'Workflow')
-      : S.view.type === 'session' ? esc(session(S.view.id)?.title || 'Session') : S.view.type === 'new' ? (S.view.id ? 'Start a session' : 'New session') : 'Stroll';
+      : S.view.type === 'session' ? esc(session(S.view.id)?.title || 'Session') : S.view.type === 'todo' ? esc(todo(S.view.id)?.title || 'To-do') : S.view.type === 'new' ? (S.view.id ? 'Start a session' : 'New session') : 'Stroll';
     const where = S.view.type === 'home' && link.computer ? `<span class="where">${esc(computer())}</span>` : '';
     return `${back}<h1>${title}</h1>${where}<i class="conn ${esc(link.state)}" aria-label="${esc(link.state)}"></i>`;
   }
@@ -226,7 +229,7 @@
   const sessionRow = s => row('session', s.id, dot(sessionDot(s)), s.title || 'Untitled session', s.preview || SESSION_LABEL[sessionDot(s)] || SESSION_LABEL[s.status] || '', '<span class="chev">›</span>');
   const workflowRow = w => row('workflow', w.id, dot(w.due && !w.due.runId ? 'waiting' : 'none'), w.name, workflowStatus(w), '<span class="go">Start</span>');
   const todoRow = t => `<li><div class="row"><button class="check ${t.status === 'done' ? 'on' : ''}" data-act="todo-toggle" data-id="${esc(t.id)}" aria-label="${t.status === 'done' ? 'Reopen' : 'Mark done'}"></button>
-      <button class="main" data-open="new" data-id="${esc(t.id)}"><span class="title">${esc(t.title)}</span>${t.notes ? `<span class="sub">${esc(t.notes.split('\n')[0])}</span>` : ''}</button><span class="go" data-open="new" data-id="${esc(t.id)}" aria-hidden="true">Start</span></div></li>`;
+      <button class="main" data-open="todo" data-id="${esc(t.id)}"><span class="title">${esc(t.title)}</span>${t.notes ? `<span class="sub">${esc(t.notes.split('\n')[0])}</span>` : ''}</button><span class="chev" data-open="todo" data-id="${esc(t.id)}" aria-hidden="true">›</span></div></li>`;
   const section = (id, title, rows, hint = '') => `<section id="${id}"><h3>${title}${hint ? `<small>${hint}</small>` : ''}</h3><ul class="list">${rows}</ul></section>`;
 
   function renderHome(view) {
@@ -950,18 +953,75 @@
   // Leaving the screen, or the app, ends it.
   document.addEventListener('visibilitychange', () => { if (document.visibilityState !== 'visible') voiceDrop(); });
 
+  // --- a to-do: read and edit it, start a session for it ---
+  // What todo:update takes is editable here (title, notes, reminder, folder, trail, done). The
+  // first message and a scheduled start are shown, not edited: only the computer's window sets
+  // those (store.setTodoStart), and a phone can't delete.
+  const toLocalInput = iso => {
+    if (!iso) return '';
+    const d = new Date(iso);
+    return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
+  };
+  const whenText = iso => new Date(iso).toLocaleString([], { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+  let todoForm = null; // the to-do whose fields are on screen: typing isn't interrupted by state pushes
+  function renderTodo(view, fresh) {
+    const t = todo(S.view.id);
+    if (!t) { todoForm = null; setHtml(view, '<section class="center"><h2>That to-do is gone</h2></section>'); return; }
+    if (fresh || todoForm !== t.id || !view.querySelector('#todo-form')) {
+      todoForm = t.id;
+      const dirs = [...new Set([...(S.data.recentDirs || []), S.data.config?.defaultCwd].filter(Boolean))];
+      const trails = S.data.trails || [];
+      setHtml(view, `<form class="detail" id="todo-form" autocomplete="off">
+        <div id="todo-live"></div>
+        <label class="field"><span>Title</span><input type="text" name="title" value="${esc(t.title)}" enterkeyhint="done"></label>
+        <label class="field"><span>Notes</span><textarea name="notes" rows="6" placeholder="Context, links, what done looks like…">${esc(t.notes || '')}</textarea>
+          <small class="help">Claude gets these with the to-do.</small></label>
+        <div class="field"><span>First message</span>${t.firstMessage?.trim() ? `<pre>${esc(t.firstMessage)}</pre>` : '<p class="help">None. Starting opens the session for you to type.</p>'}
+          <small class="help">Set on the computer, with the automatic start.</small></div>
+        <label class="field"><span>Reminder</span><input type="datetime-local" name="remindAt" value="${toLocalInput(t.remindAt)}"></label>
+        <label class="field"><span>Working directory</span><input type="text" name="cwd" list="todo-dirs" value="${esc(t.cwd || '')}" placeholder="${esc(shortDir(trail(t.trailId)?.cwd || S.data.config?.defaultCwd || ''))}" autocapitalize="off" spellcheck="false">
+          <datalist id="todo-dirs">${dirs.map(d => `<option value="${esc(d)}">`).join('')}</datalist></label>
+        ${trails.length ? `<label class="field"><span>Trail</span><select name="trailId"><option value="">None</option>${trails.map(tr => `<option value="${esc(tr.id)}" ${tr.id === t.trailId ? 'selected' : ''}>${esc(tr.title)}</option>`).join('')}</select>
+          <small class="help">Sessions started from this to-do get the trail’s notes too.</small></label>` : ''}
+        <div id="todo-work"></div>
+      </form>`);
+      const f = $('#todo-form');
+      f.addEventListener('submit', e => e.preventDefault());
+      const save = patch => ask('todo:update', t.id, patch).then(() => toast('Saved')).catch(() => {});
+      f.elements.title.addEventListener('change', e => { const v = e.target.value.trim(); if (v) save({ title: v }); else e.target.value = todo(t.id)?.title || ''; });
+      f.elements.notes.addEventListener('change', e => save({ notes: e.target.value }));
+      f.elements.remindAt.addEventListener('change', e => save({ remindAt: e.target.value ? new Date(e.target.value).toISOString() : null }));
+      f.elements.cwd.addEventListener('change', e => save({ cwd: e.target.value.trim() || null }));
+      f.elements.trailId?.addEventListener('change', e => save({ trailId: e.target.value || null }));
+    }
+    // What changes on its own: done or not, the scheduled start, the work started from it.
+    const done = t.status === 'done';
+    const live = (t.sessionIds || []).map(session).filter(s => s?.live);
+    const tr = trail(t.trailId);
+    const dir = t.cwd || tr?.cwd;
+    const start = t.startAt && !done ? `<p class="meta">Starts on its own ${esc(whenText(t.startAt))}, as ${t.startMode === 'run' ? 'a background run' : 'a session'}${dir ? ` in ${esc(shortDir(dir))}` : ''}.</p>` : '';
+    const missed = !done && (t.startMissed || t.startError) ? `<p class="meta">${t.startError ? `It couldn’t start: ${esc(t.startError)}` : `Missed its start, ${esc(whenText(t.startMissed))}.`}</p>` : '';
+    setHtml($('#todo-live'), `<p class="meta">Added ${esc(agoText(t.createdAt))}${done ? ` · done ${esc(agoText(t.doneAt))}` : ''}${tr ? ` · trail: ${esc(tr.title)}` : ''}</p>${start}${missed}
+      <div class="actions">${done ? '' : `${live.length ? `<button class="btn primary" type="button" data-open="session" data-id="${esc(live[0].id)}">Go to session</button>` : ''}
+        <button class="btn ${live.length ? '' : 'primary'}" type="button" data-open="new" data-id="${esc(t.id)}">${live.length ? 'New session' : 'Start session'}</button>`}
+        <button class="btn" type="button" data-act="todo-toggle" data-id="${esc(t.id)}">${done ? 'Reopen' : 'Mark done'}</button></div>`);
+    const sess = (t.sessionIds || []).map(session).filter(Boolean);
+    const runs = (t.runIds || []).map(run).filter(Boolean);
+    setHtml($('#todo-work'), sess.length + runs.length ? section('todo-linked', 'Linked work', `${sess.map(sessionRow).join('')}${runs.map(runRow).join('')}`) : '');
+  }
+
   // --- a new session, started from here; with a to-do (#/new/<id>), started for it ---
   function renderNew(view, fresh) {
     if (!fresh && view.querySelector('#new-form')) return;
     // As the computer's Start does: the to-do's folder, else its trail's; its first message.
-    const todo = S.view.id ? S.data.todos.find(t => t.id === S.view.id) : null;
-    const todoDir = todo && (todo.cwd || (S.data.trails || []).find(t => t.id === todo.trailId)?.cwd);
+    const forTodo = S.view.id ? todo(S.view.id) : null;
+    const todoDir = forTodo && (forTodo.cwd || trail(forTodo.trailId)?.cwd);
     const dirs = [...new Set([todoDir, ...(S.data.recentDirs || []), S.data.config?.defaultCwd].filter(Boolean))];
     setHtml(view, `<form class="detail" id="new-form" autocomplete="off">
-      ${todo ? `<p class="meta">For: ${esc(todo.title)}. Claude gets the to-do as context.</p>` : ''}
+      ${forTodo ? `<p class="meta">For: ${esc(forTodo.title)}. Claude gets the to-do as context.</p>` : ''}
       <p class="meta">Starts Claude Code on ${esc(computer())}. It keeps going there whether or not this phone stays connected.</p>
       <label class="field"><span>Folder</span><select name="cwd">${dirs.map(d => `<option value="${esc(d)}">${esc(shortDir(d))}</option>`).join('')}</select></label>
-      <label class="field"><span>First message</span><textarea name="text" rows="5" placeholder="${todo ? 'Optional. Leave empty to start typing in the session.' : 'What should Claude do?'}">${esc(todo?.firstMessage || '')}</textarea></label>
+      <label class="field"><span>First message</span><textarea name="text" rows="5" placeholder="${forTodo ? 'Optional. Leave empty to start typing in the session.' : 'What should Claude do?'}">${esc(forTodo?.firstMessage || '')}</textarea></label>
       <div class="actions bottom">${micButton()}<button class="btn primary" type="submit">Start session</button></div>
     </form>`);
     $('#new-form').addEventListener('submit', async e => {
@@ -972,8 +1032,8 @@
       const button = e.target.querySelector('[type=submit]');
       button.disabled = true;
       try {
-        const title = todo ? todo.title : text ? text.split('\n')[0].slice(0, 60) : null;
-        const id = await ask('session:create', { cwd: f.cwd.value, firstMessage: text || null, title, todoIds: todo ? [todo.id] : [] });
+        const title = forTodo ? forTodo.title : text ? text.split('\n')[0].slice(0, 60) : null;
+        const id = await ask('session:create', { cwd: f.cwd.value, firstMessage: text || null, title, todoIds: forTodo ? [forTodo.id] : [] });
         location.replace(`#/session/${id}`);
       } catch (_) { button.disabled = false; }
     });
@@ -1055,7 +1115,7 @@
     }
     else if (act === 'todo-toggle') {
       const t = S.data.todos.find(x => x.id === el.dataset.id);
-      if (t) ask('todo:update', t.id, { status: t.status === 'done' ? 'open' : 'done' }).then(() => toast('Done')).catch(() => {});
+      if (t) ask('todo:update', t.id, { status: t.status === 'done' ? 'open' : 'done' }).then(() => toast(t.status === 'done' ? 'Reopened' : 'Done')).catch(() => {});
     } else if (act === 'forget') {
       if (await confirmSheet({ title: 'Forget this computer?', body: 'This phone stops being able to reach it. To use it again, pair it from Stroll on the computer.', confirm: 'Forget', danger: true })) {
         S.data = null;
