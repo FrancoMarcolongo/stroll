@@ -102,7 +102,8 @@
   // --- navigation: the address keeps the view, so the phone's back button works ---
   function parseHash() {
     if (location.hash === '#/new') return { type: 'new' };
-    const m = location.hash.match(/^#\/(run|workflow|session)\/([\w-]+)$/);
+    // #/new/<to-do id>: a session started for that to-do.
+    const m = location.hash.match(/^#\/(run|workflow|session|new)\/([\w-]+)$/);
     return m ? { type: m[1], id: m[2] } : { type: 'home' };
   }
   const hashOf = view => (view.type === 'home' ? '#/' : view.id ? `#/${view.type}/${view.id}` : `#/${view.type}`);
@@ -167,7 +168,7 @@
   function barHtml() {
     const back = S.view.type !== 'home' && S.data ? '<button class="back" data-act="back" aria-label="Back">‹</button>' : '';
     const title = S.view.type === 'run' ? esc(run(S.view.id)?.title || 'Run') : S.view.type === 'workflow' ? esc(workflow(S.view.id)?.name || 'Workflow')
-      : S.view.type === 'session' ? esc(session(S.view.id)?.title || 'Session') : S.view.type === 'new' ? 'New session' : 'Stroll';
+      : S.view.type === 'session' ? esc(session(S.view.id)?.title || 'Session') : S.view.type === 'new' ? (S.view.id ? 'Start a session' : 'New session') : 'Stroll';
     const where = S.view.type === 'home' && link.computer ? `<span class="where">${esc(computer())}</span>` : '';
     return `${back}<h1>${title}</h1>${where}<i class="conn ${esc(link.state)}" aria-label="${esc(link.state)}"></i>`;
   }
@@ -225,7 +226,7 @@
   const sessionRow = s => row('session', s.id, dot(sessionDot(s)), s.title || 'Untitled session', s.preview || SESSION_LABEL[sessionDot(s)] || SESSION_LABEL[s.status] || '', '<span class="chev">›</span>');
   const workflowRow = w => row('workflow', w.id, dot(w.due && !w.due.runId ? 'waiting' : 'none'), w.name, workflowStatus(w), '<span class="go">Start</span>');
   const todoRow = t => `<li><div class="row"><button class="check ${t.status === 'done' ? 'on' : ''}" data-act="todo-toggle" data-id="${esc(t.id)}" aria-label="${t.status === 'done' ? 'Reopen' : 'Mark done'}"></button>
-      <span class="main"><span class="title">${esc(t.title)}</span>${t.notes ? `<span class="sub">${esc(t.notes.split('\n')[0])}</span>` : ''}</span></div></li>`;
+      <button class="main" data-open="new" data-id="${esc(t.id)}"><span class="title">${esc(t.title)}</span>${t.notes ? `<span class="sub">${esc(t.notes.split('\n')[0])}</span>` : ''}</button><span class="go" data-open="new" data-id="${esc(t.id)}" aria-hidden="true">Start</span></div></li>`;
   const section = (id, title, rows, hint = '') => `<section id="${id}"><h3>${title}${hint ? `<small>${hint}</small>` : ''}</h3><ul class="list">${rows}</ul></section>`;
 
   function renderHome(view) {
@@ -949,14 +950,18 @@
   // Leaving the screen, or the app, ends it.
   document.addEventListener('visibilitychange', () => { if (document.visibilityState !== 'visible') voiceDrop(); });
 
-  // --- a new session, started from here ---
+  // --- a new session, started from here; with a to-do (#/new/<id>), started for it ---
   function renderNew(view, fresh) {
     if (!fresh && view.querySelector('#new-form')) return;
-    const dirs = [...new Set([...(S.data.recentDirs || []), S.data.config?.defaultCwd].filter(Boolean))];
+    // As the computer's Start does: the to-do's folder, else its trail's; its first message.
+    const todo = S.view.id ? S.data.todos.find(t => t.id === S.view.id) : null;
+    const todoDir = todo && (todo.cwd || (S.data.trails || []).find(t => t.id === todo.trailId)?.cwd);
+    const dirs = [...new Set([todoDir, ...(S.data.recentDirs || []), S.data.config?.defaultCwd].filter(Boolean))];
     setHtml(view, `<form class="detail" id="new-form" autocomplete="off">
+      ${todo ? `<p class="meta">For: ${esc(todo.title)}. Claude gets the to-do as context.</p>` : ''}
       <p class="meta">Starts Claude Code on ${esc(computer())}. It keeps going there whether or not this phone stays connected.</p>
       <label class="field"><span>Folder</span><select name="cwd">${dirs.map(d => `<option value="${esc(d)}">${esc(shortDir(d))}</option>`).join('')}</select></label>
-      <label class="field"><span>First message</span><textarea name="text" rows="5" placeholder="What should Claude do?"></textarea></label>
+      <label class="field"><span>First message</span><textarea name="text" rows="5" placeholder="${todo ? 'Optional. Leave empty to start typing in the session.' : 'What should Claude do?'}">${esc(todo?.firstMessage || '')}</textarea></label>
       <div class="actions bottom">${micButton()}<button class="btn primary" type="submit">Start session</button></div>
     </form>`);
     $('#new-form').addEventListener('submit', async e => {
@@ -967,7 +972,8 @@
       const button = e.target.querySelector('[type=submit]');
       button.disabled = true;
       try {
-        const id = await ask('session:create', { cwd: f.cwd.value, firstMessage: text || null, title: text ? text.split('\n')[0].slice(0, 60) : null });
+        const title = todo ? todo.title : text ? text.split('\n')[0].slice(0, 60) : null;
+        const id = await ask('session:create', { cwd: f.cwd.value, firstMessage: text || null, title, todoIds: todo ? [todo.id] : [] });
         location.replace(`#/session/${id}`);
       } catch (_) { button.disabled = false; }
     });

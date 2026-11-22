@@ -43,6 +43,8 @@ section h3 small { margin-left: 8px; font-size: 12px; font-weight: 400; text-tra
 .row { display: flex; align-items: center; gap: 12px; width: 100%; min-height: 56px; padding: 9px 14px; text-align: left; background: var(--bg-raised); border: 1px solid var(--line-soft); border-radius: 12px; }
 button.row:active { background: var(--bg-hover); }
 .row .main { flex: 1; min-width: 0; display: grid; gap: 1px; }
+button.main { background: none; border: 0; padding: 0; text-align: left; align-self: stretch; align-content: center; }
+button.main:active .title { color: var(--accent); }
 .row .title { font-weight: 550; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .row .sub { color: var(--text-3); font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .row .chev { color: var(--text-3); font-size: 22px; line-height: 1; }
