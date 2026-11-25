@@ -54,6 +54,8 @@ After an update, Stroll shows what changed, once. **Settings › Updates › Wha
 | ⌘1–9 | Ctrl+Shift+1–9 | Jump to a live session |
 | Ctrl+Tab | Ctrl+Tab | Next live session (Ctrl+Shift+Tab: previous) |
 | ⌘, | Ctrl+Shift+, | Settings |
+| ⌘\ | Ctrl+Shift+\ | Show or hide the menu |
+| ⌘O | Ctrl+Shift+O | Show or hide the side panel (the trail of what's open) |
 | ⌘C / ⌘V | Ctrl+Shift+C / Ctrl+Shift+V | Copy the selection / paste, in a session |
 | Shift+Enter | Shift+Enter | New line in Claude's prompt |
 | Esc | Esc | Interrupt Claude (as in the terminal) |
@@ -71,6 +73,7 @@ On Linux, plain Ctrl keys (Ctrl+K, Ctrl+J, Ctrl+R, Ctrl+V…) go to Claude Code,
   - **Workflows can belong to a trail:** connect one under **Workflows** on the trail, or pick the trail in the workflow's Setup. Everything it starts goes on the trail and gets the notes.
   - A trail can **Hand off** a background run, which gets the notes too. **Archive** it when the work is done; archived trails fold under **Archived**.
 - **Sessions in your home folder** answer Claude Code's "trust this folder" prompt for you. Claude Code never remembers trust for the home folder, so it would ask every time, resumes included. Other folders ask once, as usual.
+- **Three columns:** the menu, what's open, and a side panel with the trail of what's open: its notes, and what sessions suggest for them, to add or dismiss without leaving the session. Drag a border to make a column wider or narrower; double-click it to put it back. The middle always keeps about 90 columns for Claude Code (its diffs and tables wrap below that), so in a narrow window the side panel waits until there's room. ⌘\ hides the menu and ⌘O the side panel, as do the buttons at the top of each.
 - **Sidebar sections** collapse when you click their title and move when you drag it, and closed sessions fold under their own **Closed** title. All of it is remembered. A collapsed section shows a yellow dot when something inside needs you.
 - **Search** (⌘F) filters every sidebar section as you type: to-dos (notes too), trails (notes too), sessions, runs, workflows and Elsewhere. Collapsed sections and the Closed and Archived lists open, limits like "last 8 closed" lift, and a match in hidden text shows as a snippet. ↑↓ and Enter open a match; Esc clears.
 - **Right-click a session** to mark it read or unread, or to mute its notifications.

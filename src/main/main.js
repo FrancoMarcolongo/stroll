@@ -443,6 +443,7 @@ function publicConfig() {
     trails: config.trails,
     remote: { enabled: Boolean(config.remote?.enabled), relayUrl: config.remote?.relayUrl || '', notify: notifyMode(config.remote?.notify) },
     sidebar: config.sidebar,
+    layout: config.layout,
     claudePath: config.claudePath,
     claudeMissing: !config.claudePath,
     version: app.getVersion(),
@@ -610,6 +611,9 @@ function buildMenu() {
       label: 'View',
       submenu: [
         // Ctrl+R is Claude Code's history search.
+        { label: 'Show or Hide the Menu', ...appKey('\\'), click: () => send('ui:command', 'toggle-menu') },
+        { label: 'Show or Hide the Side Panel', ...appKey('O'), click: () => send('ui:command', 'toggle-side') },
+        { type: 'separator' },
         IS_MAC ? { role: 'reload' } : { role: 'reload', accelerator: 'Ctrl+Shift+R' }, { role: 'toggleDevTools' }, { type: 'separator' },
         { role: 'resetZoom' }, { role: 'zoomIn' }, { role: 'zoomOut' }, { type: 'separator' }, { role: 'togglefullscreen' },
       ],

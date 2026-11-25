@@ -37,7 +37,53 @@ input, textarea { font: inherit; color: var(--text); }
 svg { flex: none; display: block; }
 kbd { font: 500 10.5px/1 var(--font); color: var(--text-3); background: var(--bg-raised); border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 5px; padding: 3px 5px; }
 
-#app { display: grid; grid-template-columns: 296px 1fr; height: 100vh; }
+/* ---------- the columns: menu | what's open | side panel (app.js, "layout") ---------- */
+/* The widths are set by app.js; the splitters sit over the borders and take no room. */
+#app { --menu-w: 296px; --side-w: 0px; position: relative; display: grid; grid-template-columns: var(--menu-w) minmax(0, 1fr) var(--side-w); height: 100vh; }
+#sidebar { grid-column: 1; }
+#main { grid-column: 2; }
+#dock { grid-column: 3; } /* each keeps its column when another is hidden */
+#sidebar, #main, #dock { grid-row: 1; }
+#app[data-menu="closed"] #sidebar, #app[data-side="off"] #dock { display: none; }
+.splitter { position: absolute; top: 0; bottom: 0; width: 7px; z-index: 30; cursor: col-resize; }
+.splitter::after { content: ''; position: absolute; top: 0; bottom: 0; left: 3px; width: 1px; transition: background 0.12s; }
+.splitter:hover::after, .splitter.dragging::after { background: var(--accent); }
+#split-menu { left: calc(var(--menu-w) - 4px); }
+#split-side { right: calc(var(--side-w) - 4px); }
+#app[data-menu="closed"] #split-menu, #app:not([data-side="open"]) #split-side { display: none; }
+body.resizing, body.resizing * { cursor: col-resize !important; user-select: none; }
+body.resizing #terminals { pointer-events: none; }
+#main { position: relative; }
+#menu-hide { margin-left: 2px; }
+#menu-show { position: absolute; top: 11px; left: 80px; z-index: 6; display: none; -webkit-app-region: no-drag; }
+:root:not([data-platform="darwin"]) #menu-show { left: 10px; }
+#app[data-menu="closed"] #menu-show { display: inline-grid; }
+#app[data-menu="closed"] #view-header { padding-left: 112px; }
+:root:not([data-platform="darwin"]) #app[data-menu="closed"] #view-header { padding-left: 42px; }
+#side-show { position: absolute; top: 11px; right: 10px; z-index: 6; display: none; -webkit-app-region: no-drag; }
+#side-show svg { transform: scaleX(-1); }
+#app[data-side="off"] #side-show { display: inline-grid; }
+#app[data-side="off"] #view-header { padding-right: 42px; }
+
+/* ---------- the side panel: the trail of what's open ---------- */
+#dock { background: var(--bg-side); border-left: 1px solid var(--line-soft); display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; }
+#dock-head { min-height: 46px; display: flex; align-items: center; gap: 6px; padding: 0 8px 0 10px; border-bottom: 1px solid var(--line-soft); flex: none; }
+.dock-title { flex: 1; min-width: 0; display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; font-weight: 600; color: var(--text-2); padding-left: 4px; }
+.dock-title .count { background: var(--accent-soft); color: var(--accent); }
+#dock-hide { -webkit-app-region: no-drag; }
+.dock-view { flex: 1; min-height: 0; position: relative; overflow-y: auto; overflow-x: hidden; }
+#dock-trail { padding: 14px 14px 30px; }
+.dock-trail { display: grid; gap: 14px; }
+.dock-trail-head { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.dock-trail-head b { font-size: 13.5px; font-weight: 650; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.dock-trail-head .spacer { flex: 1; }
+.dock-trail .suggestions { padding: 12px; gap: 10px; }
+.dock-notes { white-space: pre-wrap; overflow-wrap: anywhere; color: var(--text-2); font-size: 12.5px; line-height: 1.55; background: var(--bg); border: 1px solid var(--line-soft); border-radius: 10px; padding: 10px 12px; }
+.dock-notes .h { display: block; color: var(--text); font-weight: 650; }
+.dock-notes b { color: var(--text); font-weight: 600; }
+.dock-notes code { font: 11.5px var(--mono, ui-monospace, Menlo, monospace); background: var(--bg-hover); padding: 0 4px; border-radius: 4px; }
+.dock-empty { color: var(--text-3); font-size: 12.5px; line-height: 1.55; display: grid; gap: 10px; justify-items: start; }
+.dock-label { color: var(--text-3); font-size: 11px; font-weight: 650; text-transform: uppercase; letter-spacing: 0.6px; }
 
 /* ---------- sidebar ---------- */
 #sidebar { background: var(--bg-side); border-right: 1px solid var(--line-soft); display: flex; flex-direction: column; min-height: 0; }

@@ -2,6 +2,13 @@
 
 Stroll shows the new sections here once, after an update. **Settings › Updates › What's new** shows them all again.
 
+## 0.15.0 — 2026-11-25
+
+### Three columns
+- **A side panel with the trail of what's open.** Next to a session (or a run, to-do or workflow) on a trail: its notes, and what sessions suggest for them, to touch up and add or dismiss without leaving the session. ⌘O, or the button at the top right, shows and hides it.
+- **Hide the menu** with ⌘\ or the button at its top, and bring it back the same way.
+- **Drag a column's border** to make it wider or narrower; double-click it to put it back. Claude Code always keeps about 90 columns in the middle, so in a narrow window the side panel waits until there's room.
+
 ## 0.14.0 — 2026-11-25
 
 ### Trails on the phone

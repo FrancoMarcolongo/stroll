@@ -107,6 +107,8 @@ const ICON = {
   condense: svgIcon('<path d="M4 6h16M7 12h10M10 18h4"/>'),
   search: svgIcon('<circle cx="11" cy="11" r="6.5"/><path d="M20 20l-4.2-4.2"/>'),
   x: svgIcon('<path d="M18 6L6 18M6 6l12 12"/>'),
+  panelLeft: svgIcon('<rect x="3" y="4" width="18" height="16" rx="2.5"/><path d="M9 4v16"/><path d="M15.5 10l-2 2 2 2"/>'),
+  panelRight: svgIcon('<rect x="3" y="4" width="18" height="16" rx="2.5"/><path d="M15 4v16"/><path d="M8.5 10l2 2-2 2"/>'),
 };
 document.querySelectorAll('[data-icon]').forEach(el => { el.innerHTML = ICON[el.dataset.icon] || ''; });
 
@@ -613,6 +615,7 @@ function navigate(view) {
   api.send('ui:focus', view);
   renderSidebar();
   renderMain();
+  renderDock();
 }
 
 // A view can be opened for something created a moment ago (a new session, a hand-off) before
@@ -1541,7 +1544,9 @@ document.addEventListener('click', async e => {
         const box = actEl.closest('[data-sugg]');
         if (!box) return undefined;
         const accept = act === 'sug-accept';
-        await api.invoke('trail:suggestion', S.view.id, box.dataset.sugg, accept, accept ? box.querySelector('textarea').value : null);
+        // From the trail's own view, or from the side panel next to one of its sessions.
+        const trailId = actEl.closest('[data-trail-id]')?.dataset.trailId || S.view.id;
+        await api.invoke('trail:suggestion', trailId, box.dataset.sugg, accept, accept ? box.querySelector('textarea').value : null);
         return accept ? flash(box.hasAttribute('data-swap') ? 'Replaced in the notes' : 'Added to the notes', null, { ms: 1800 }) : undefined;
       }
       case 'condense-start': return api.invoke('trail:condense', S.view.id, 'start').catch(flashError);
@@ -1975,7 +1980,7 @@ window.addEventListener('keydown', e => {
   }
 }, true);
 
-const LINUX_SHORTCUTS = { KeyN: 'new-session', KeyK: 'quick-add', KeyF: 'search', Digit0: 'home', KeyJ: 'next-needs', Comma: 'settings' };
+const LINUX_SHORTCUTS = { KeyN: 'new-session', KeyK: 'quick-add', KeyF: 'search', Digit0: 'home', KeyJ: 'next-needs', Comma: 'settings', Backslash: 'toggle-menu', KeyO: 'toggle-side' };
 
 function runCommand(cmd) {
   if (cmd === 'quick-add') { $('#quick-add-input').focus(); $('#quick-add-input').select(); }
@@ -1984,6 +1989,8 @@ function runCommand(cmd) {
   if (cmd === 'home') navigate({ type: 'home' });
   if (cmd === 'settings') navigate({ type: 'settings' });
   if (cmd === 'next-needs') nextNeedingYou();
+  if (cmd === 'toggle-menu') toggleMenu();
+  if (cmd === 'toggle-side') toggleSide();
   if (cmd === 'show-update') renderBanner();
   if (cmd === 'up-to-date') flash('Stroll is up to date');
 }
@@ -2017,6 +2024,7 @@ api.on('state:changed', data => {
   S.data = { ...data, config: keepConfig };
   for (const id of [...S.selected]) if (!todo(id) || todo(id).status !== 'open') S.selected.delete(id);
   renderSidebar();
+  renderDock();
   const v = S.view;
   if (v.type === 'home') renderMain();
   else if (v.type === 'session') updateSessionHeader();
@@ -2042,7 +2050,17 @@ api.on('state:changed', data => {
   }
 });
 
-new ResizeObserver(() => fitVisible()).observe($('#terminals'));
+// Dragging a column's border changes the terminal's size continuously, and Claude Code redraws
+// for every new size: it's told at most every 120 ms, and once more when the size settles.
+let fitTimer = 0;
+let fitAt = 0;
+function fitSoon() {
+  clearTimeout(fitTimer);
+  const wait = 120 - (Date.now() - fitAt);
+  const fit = () => { fitAt = Date.now(); fitVisible(); };
+  if (wait <= 0) fit(); else fitTimer = setTimeout(fit, wait);
+}
+new ResizeObserver(fitSoon).observe($('#terminals'));
 setInterval(() => { renderSidebar(); if (sectionOpen('recent')) refreshRecent(); }, 60 * 1000);
 
 // ---------- banner: Claude Code missing, update available ----------
@@ -2332,6 +2350,12 @@ function renderSettings(header, panel) {
       </div>
       ${IS_MAC ? toggle('set-option-meta', c.terminal.optionIsMeta, 'Use Option as Meta', 'Enables Option+Enter and Option+arrows in Claude Code. Leave it off if you type characters such as @ or # with Option.') : ''}
     </section>
+    <section class="set-group"><h3>Layout</h3>
+      <div class="field"><label>Side panel</label>
+        <select id="set-side">${[['open', 'Open: the trail of what’s open, its notes and suggestions'], ['off', 'Hidden']]
+    .map(([v, l]) => `<option value="${v}" ${layout().side === v ? 'selected' : ''}>${l}</option>`).join('')}</select>
+        <p class="help">${APP_KEY}O shows and hides it, and ${APP_KEY}\\ hides the menu. Drag a column’s border to make it wider or narrower; double-click the border to put it back.</p></div>
+    </section>
     <section class="set-group"><h3>Notifications</h3>
       ${toggle('set-n-enabled', c.notifications.enabled, 'Show notifications')}
       ${toggle('set-n-sound', c.notifications.sound, 'Play a sound')}
@@ -2375,6 +2399,7 @@ function renderSettings(header, panel) {
   bind('#set-font-size', 'change', e => save({ terminal: { fontSize: Math.min(24, Math.max(9, Number(e.target.value) || 13)) } }));
   bind('#set-font-family', 'change', e => save({ terminal: { fontFamily: e.target.value.trim() || 'Menlo, monospace' } }));
   if (IS_MAC) bind('#set-option-meta', 'change', e => save({ terminal: { optionIsMeta: e.target.checked } }));
+  bind('#set-side', 'change', e => saveLayout({ side: e.target.value }));
   bind('#set-n-enabled', 'change', e => save({ notifications: { enabled: e.target.checked } }));
   bind('#set-n-sound', 'change', e => save({ notifications: { sound: e.target.checked } }));
   bind('#set-n-needs', 'change', e => save({ notifications: { needsYou: e.target.checked } }));
@@ -2507,6 +2532,7 @@ api.on('config:changed', cfg => {
     e.term.options.macOptionIsMeta = cfg.terminal.optionIsMeta === true;
   }
   fitVisible();
+  applyLayout();
   renderBanner();
   const rules = $('#set-extra-rules');
   if (rules && document.activeElement !== rules) rules.value = (cfg.background.extraAllowedTools || []).join('\n');
@@ -2514,10 +2540,151 @@ api.on('config:changed', cfg => {
 
 $('#settings-btn').addEventListener('click', () => navigate({ type: 'settings' }));
 
+// ---------- layout: the menu, what's open in the middle, the side panel ----------
+// Three columns. The menu and the side panel are dragged wider or narrower from their borders
+// (a double-click puts a border back), and either can be put away. The middle keeps room for
+// Claude Code, whose diffs and tables wrap below about 90 columns: in a window too narrow for
+// all three, the side panel waits, hidden, until it's wider again.
+const LAYOUT = { menu: 'open', side: 'off', menuWidth: 296, sideWidth: 360 };
+const MENU_W = [220, 440];
+const SIDE_W = [280, 720];
+const clampW = (w, [lo, hi]) => Math.min(hi, Math.max(lo, Number(w) || lo));
+const layout = () => ({ ...LAYOUT, ...(S.data?.config?.layout || {}) });
+const centerMin = () => Math.round(90 * (Number(S.data?.config?.terminal?.fontSize) || 13) * 0.6) + 24;
+const sideFits = menu => innerWidth - menu - clampW(layout().sideWidth, SIDE_W) >= centerMin();
+
+function columns() {
+  const L = layout();
+  const menu = L.menu === 'closed' ? 0 : clampW(L.menuWidth, MENU_W);
+  const side = L.side === 'open' && sideFits(menu) ? 'open' : 'off';
+  return { menu, side, sideW: side === 'open' ? clampW(L.sideWidth, SIDE_W) : 0 };
+}
+
+function applyLayout() {
+  if (!S.data) return;
+  const c = columns();
+  const app = $('#app');
+  app.style.setProperty('--menu-w', `${c.menu}px`);
+  app.style.setProperty('--side-w', `${c.sideW}px`);
+  app.dataset.menu = c.menu ? 'open' : 'closed';
+  app.dataset.side = c.side;
+  renderDock();
+}
+
+function saveLayout(patch) {
+  S.data.config.layout = { ...layout(), ...patch };
+  applyLayout();
+  api.invoke('config:set', { layout: patch }).catch(flashError);
+}
+
+function toggleMenu() { saveLayout({ menu: layout().menu === 'closed' ? 'open' : 'closed' }); }
+function toggleSide() {
+  if (columns().side === 'open') { saveLayout({ side: 'off' }); return; }
+  // Kept open for when the window is wider, and said why it isn't showing yet.
+  if (!sideFits(columns().menu)) flash(`The window is too narrow for the side panel next to Claude Code. Make it wider, or hide the menu (${APP_KEY}\\).`, null, { ms: 5000 });
+  saveLayout({ side: 'open' });
+}
+
+// A border dragged: the column follows the pointer within its limits, leaving the middle its
+// room, and the width is kept when the pointer lets go.
+function splitter(el, key, range, sign) {
+  const prop = key === 'menuWidth' ? '--menu-w' : '--side-w';
+  el.addEventListener('pointerdown', e => {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    try { el.setPointerCapture(e.pointerId); } catch (_) { /* a pointer that's already gone */ }
+    el.classList.add('dragging');
+    document.body.classList.add('resizing');
+    const c = columns();
+    const w0 = key === 'menuWidth' ? c.menu : c.sideW;
+    const max = Math.max(range[0], Math.min(range[1], innerWidth - (key === 'menuWidth' ? c.sideW : c.menu) - centerMin()));
+    let w = w0;
+    const move = ev => {
+      w = Math.round(Math.min(max, Math.max(range[0], w0 + sign * (ev.clientX - e.clientX))));
+      $('#app').style.setProperty(prop, `${w}px`);
+    };
+    const up = () => {
+      el.removeEventListener('pointermove', move);
+      el.removeEventListener('pointerup', up);
+      el.removeEventListener('pointercancel', up);
+      el.classList.remove('dragging');
+      document.body.classList.remove('resizing');
+      if (w !== w0) saveLayout({ [key]: w });
+    };
+    el.addEventListener('pointermove', move);
+    el.addEventListener('pointerup', up);
+    el.addEventListener('pointercancel', up);
+  });
+  el.addEventListener('dblclick', () => saveLayout({ [key]: LAYOUT[key] }));
+}
+splitter($('#split-menu'), 'menuWidth', MENU_W, 1);
+splitter($('#split-side'), 'sideWidth', SIDE_W, -1);
+let layoutFrame = 0;
+addEventListener('resize', () => { cancelAnimationFrame(layoutFrame); layoutFrame = requestAnimationFrame(applyLayout); });
+$('#menu-hide').addEventListener('click', toggleMenu);
+$('#menu-show').addEventListener('click', toggleMenu);
+$('#side-show').addEventListener('click', toggleSide);
+$('#dock-hide').addEventListener('click', toggleSide);
+
+// ---------- the side panel: the trail of what's open ----------
+function renderDock() {
+  if (!S.data) return;
+  const tr = dockTrail();
+  $('#dock-trail-count').textContent = tr?.suggestions?.length ? String(tr.suggestions.length) : '';
+  if ($('#app').dataset.side === 'open') renderDockTrail();
+}
+
+// The trail of what's open in the middle: a session's, a run's, a to-do's or a workflow's.
+function dockTrail() {
+  const v = S.view;
+  const item = { session, run, todo, workflow }[v.type]?.(v.id);
+  return trail(item?.trailId) || null;
+}
+
+// Its suggestions, answered here as on the trail's own page, and its notes to read. Built once
+// per trail; state pushes patch it, and a suggestion being touched up is never redrawn.
+function renderDockTrail() {
+  const box = $('#dock-trail');
+  const v = S.view;
+  const tr = dockTrail();
+  const set = (key, html) => { if (box.dataset.key !== key) { box.dataset.key = key; box.innerHTML = html; } };
+  if (v.type === 'trail') { set('here', '<div class="dock-empty">This trail is open in the middle.</div>'); return; }
+  if (!tr) {
+    set(`none:${v.type}`, v.type === 'session'
+      ? `<div class="dock-empty">This session isn’t on a trail. Sessions on a trail start with its notes, and suggest what the next one should know.<button class="btn sm" data-act="session-trail">${ICON.trail}Add to trail</button></div>`
+      : '<div class="dock-empty">Open a session that’s on a trail to see the trail’s notes and suggestions here.</div>');
+    return;
+  }
+  set(`trail:${tr.id}`, `<div class="dock-trail" data-trail-id="${esc(tr.id)}">
+    <div class="dock-trail-head">${ICON.trail}<b id="dock-trail-title"></b><span class="spacer"></span><button class="btn sm ghost" data-goto-trail="${esc(tr.id)}">Open</button></div>
+    <div id="dock-sugs"></div>
+    <div><div class="dock-label">Notes</div><div class="dock-notes" id="dock-notes"></div></div>
+  </div>`);
+  $('#dock-trail-title').textContent = tr.title;
+  const notes = $('#dock-notes');
+  const shown = tr.notes.trim() ? lightMarkdown(tr.notes) : '<span class="hint">No notes yet. Open the trail to write them.</span>';
+  if (notes.dataset.markup !== shown) { notes.innerHTML = shown; notes.dataset.markup = shown; }
+  const sbox = $('#dock-sugs');
+  const sugs = tr.suggestions || [];
+  const swaps = x => Boolean(x.replaces && tr.notes.includes(x.replaces));
+  const key = sugs.map(x => `${x.id}${swaps(x) ? '>' : ''}`).join(',');
+  if (sbox.dataset.key === key) return;
+  const edits = new Map([...sbox.querySelectorAll('[data-sugg]')].map(el => [el.dataset.sugg, el.querySelector('textarea').value]));
+  sbox.dataset.key = key;
+  sbox.innerHTML = !sugs.length ? '' : `<div class="suggestions"><div class="ap-head">${ICON.note}<b>Suggested for the notes</b></div>
+    ${sugs.map(x => `<div class="sugg" data-sugg="${esc(x.id)}"${swaps(x) ? ' data-swap' : ''}>
+      ${x.replaces ? `<div class="sugg-old">${swaps(x) ? 'Takes the place of' : 'The line it was to replace is gone, so this adds one. It was'}: <del>${esc(x.replaces)}</del></div>` : ''}
+      <textarea rows="${Math.min(6, Math.max(2, Math.ceil(x.text.length / 42)))}" spellcheck="false">${esc(edits.get(x.id) ?? x.text)}</textarea>
+      <div class="sugg-foot"><span class="h-meta">${x.sessionTitle ? `From “${esc(x.sessionTitle)}”` : agoText(x.createdAt)}</span><span class="spacer"></span>
+        <button class="btn sm primary" data-act="sug-accept">${ICON.check}${swaps(x) ? 'Replace' : 'Add'}</button><button class="btn sm ghost" data-act="sug-dismiss">Dismiss</button></div>
+    </div>`).join('')}</div>`;
+}
+
 (async () => {
   S.data = await api.invoke('state:get');
   S.update = S.data.update || null;
   applySidebarLayout();
+  applyLayout();
   renderSidebar();
   if (sectionOpen('recent')) refreshRecent();
   renderBanner();

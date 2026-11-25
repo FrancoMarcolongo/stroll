@@ -22,6 +22,7 @@
           Stroll
         </span>
         <button type="button" id="settings-btn" class="icon-btn" title="Settings (⌘,)"><span data-icon="settings"></span></button>
+        <button type="button" id="menu-hide" class="icon-btn" title="Hide the menu (⌘\)"><span data-icon="panelLeft"></span></button>
       </div>
       <nav class="nav">
         <button type="button" id="home-btn" class="nav-item" title="Overview (⌘0)"><span class="nav-icon" data-icon="overview"></span><span>Overview</span><span class="nav-count" id="nav-needs"></span></button>
@@ -75,12 +76,26 @@
     </aside>
     <main id="main">
       <div id="view-header" class="drag-strip"></div>
+      <!-- After the header: macOS works out the window's drag areas in document order, so a
+           button that came before the header would be swallowed by its drag area. -->
+      <button type="button" id="menu-show" class="icon-btn" title="Show the menu (⌘\)"><span data-icon="panelLeft"></span></button>
+      <button type="button" id="side-show" class="icon-btn" title="Show the side panel: the trail of what’s open (⌘O)"><span data-icon="panelRight"></span></button>
       <div id="banner" hidden></div>
       <div id="view-body">
         <div id="terminals"></div>
         <div id="panel"></div>
       </div>
     </main>
+    <!-- The side panel: the trail of what's open in the middle. -->
+    <aside id="dock">
+      <div id="dock-head" class="drag-strip">
+        <span class="dock-title">Trail<span class="count" id="dock-trail-count"></span></span>
+        <button type="button" id="dock-hide" class="icon-btn" title="Hide the side panel (⌘O)"><span data-icon="panelRight"></span></button>
+      </div>
+      <div id="dock-trail" class="dock-view"></div>
+    </aside>
+    <div class="splitter" id="split-menu" title="Drag to resize · double-click to reset"></div>
+    <div class="splitter" id="split-side" title="Drag to resize · double-click to reset"></div>
   </div>
   <div id="modal-root"></div>
   <script src="../../node_modules/@xterm/xterm/lib/xterm.js"></script>
