@@ -1130,20 +1130,24 @@
     if (!t) { todoForm = null; setHtml(view, '<section class="center"><h2>That to-do is gone</h2></section>'); return; }
     if (fresh || todoForm !== t.id || !view.querySelector('#todo-form')) {
       todoForm = t.id;
-      const dirs = [...new Set([...(S.data.recentDirs || []), S.data.config?.defaultCwd].filter(Boolean))];
-      const trails = S.data.trails || [];
+      // The folder is picked from the ones Stroll knows, as when starting a session here: a
+      // folder typed on a phone can't be checked.
+      const dirs = [...new Set([t.cwd, ...activeTrails().map(x => x.cwd), ...(S.data.recentDirs || []), S.data.config?.defaultCwd].filter(Boolean))];
+      const trails = activeTrails();
+      const own = trail(t.trailId);
+      if (own && !trails.includes(own)) trails.unshift(own); // its own, even archived
       setHtml(view, `<form class="detail" id="todo-form" autocomplete="off">
         <div id="todo-live"></div>
         <label class="field"><span>Title</span><input type="text" name="title" value="${esc(t.title)}" enterkeyhint="done"></label>
         <label class="field"><span>Notes</span><textarea name="notes" rows="6" placeholder="Context, links, what done looks like…">${esc(t.notes || '')}</textarea>
-          <small class="help">Claude gets these with the to-do.</small></label>
-        <div class="field"><span>First message</span>${t.firstMessage?.trim() ? `<pre>${esc(t.firstMessage)}</pre>` : '<p class="help">None. Starting opens the session for you to type.</p>'}
-          <small class="help">Set on the computer, with the automatic start.</small></div>
+          <small class="hint">Claude gets these with the to-do.</small></label>
+        <div class="field"><span>First message</span>${t.firstMessage?.trim() ? `<pre>${esc(t.firstMessage)}</pre>` : '<p class="hint">None. Starting opens the session for you to type.</p>'}
+          <small class="hint">Set on the computer, with the automatic start.</small></div>
         <label class="field"><span>Reminder</span><input type="datetime-local" name="remindAt" value="${toLocalInput(t.remindAt)}"></label>
-        <label class="field"><span>Working directory</span><input type="text" name="cwd" list="todo-dirs" value="${esc(t.cwd || '')}" placeholder="${esc(shortDir(trail(t.trailId)?.cwd || S.data.config?.defaultCwd || ''))}" autocapitalize="off" spellcheck="false">
-          <datalist id="todo-dirs">${dirs.map(d => `<option value="${esc(d)}">`).join('')}</datalist></label>
+        <label class="field"><span>Working directory</span><select name="cwd"><option value=""></option>${dirs.map(d => `<option value="${esc(d)}" ${d === t.cwd ? 'selected' : ''}>${esc(shortDir(d))}</option>`).join('')}</select>
+          <small class="hint" id="todo-where"></small></label>
         ${trails.length ? `<label class="field"><span>Trail</span><select name="trailId"><option value="">None</option>${trails.map(tr => `<option value="${esc(tr.id)}" ${tr.id === t.trailId ? 'selected' : ''}>${esc(tr.title)}</option>`).join('')}</select>
-          <small class="help">Sessions started from this to-do get the trail’s notes too.</small></label>` : ''}
+          <small class="hint">Sessions started from this to-do get the trail’s notes too.</small></label>` : ''}
         <div id="todo-work"></div>
       </form>`);
       const f = $('#todo-form');
@@ -1152,7 +1156,7 @@
       f.elements.title.addEventListener('change', e => { const v = e.target.value.trim(); if (v) save({ title: v }); else e.target.value = todo(t.id)?.title || ''; });
       f.elements.notes.addEventListener('change', e => save({ notes: e.target.value }));
       f.elements.remindAt.addEventListener('change', e => save({ remindAt: e.target.value ? new Date(e.target.value).toISOString() : null }));
-      f.elements.cwd.addEventListener('change', e => save({ cwd: e.target.value.trim() || null }));
+      f.elements.cwd.addEventListener('change', e => save({ cwd: e.target.value || null }));
       f.elements.trailId?.addEventListener('change', e => save({ trailId: e.target.value || null }));
     }
     // What changes on its own: done or not, the scheduled start, the work started from it.
@@ -1160,6 +1164,13 @@
     const live = (t.sessionIds || []).map(session).filter(s => s?.live);
     const tr = trail(t.trailId);
     const dir = t.cwd || tr?.cwd;
+    // Where a to-do set to start on its own starts is chosen in the computer's window, as for
+    // Claude sessions (updateTodo in main.js): the phone shows it but doesn't move it.
+    const f = $('#todo-form');
+    const locked = Boolean(t.startAt) && !done;
+    for (const el of [f.elements.cwd, f.elements.trailId]) if (el) el.disabled = locked;
+    f.elements.cwd.options[0].textContent = tr?.cwd ? `The trail’s (${shortDir(tr.cwd)})` : 'Not set';
+    $('#todo-where').textContent = locked ? 'It starts on its own, so its folder and trail are changed on the computer.' : '';
     const start = t.startAt && !done ? `<p class="meta">Starts on its own ${esc(whenText(t.startAt))}, as ${t.startMode === 'run' ? 'a background run' : 'a session'}${dir ? ` in ${esc(shortDir(dir))}` : ''}.</p>` : '';
     const missed = !done && (t.startMissed || t.startError) ? `<p class="meta">${t.startError ? `It couldn’t start: ${esc(t.startError)}` : `Missed its start, ${esc(whenText(t.startMissed))}.`}</p>` : '';
     setHtml($('#todo-live'), `<p class="meta">Added ${esc(agoText(t.createdAt))}${done ? ` · done ${esc(agoText(t.doneAt))}` : ''}${tr ? ` · trail: ${esc(tr.title)}` : ''}</p>${start}${missed}

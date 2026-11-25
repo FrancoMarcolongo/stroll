@@ -138,7 +138,6 @@ button.main:active .title { color: var(--accent); }
 .mic.on { background: var(--red-soft); border-color: rgba(248, 81, 73, 0.55); color: #ff8a83; animation: listening 1.4s infinite; }
 @keyframes listening { 50% { box-shadow: 0 0 0 5px var(--red-soft); } }
 .actions .mic { flex: none; }
-.help { color: var(--text-3); font-size: 12.5px; line-height: 1.45; }
 #todo-live { display: grid; gap: 10px; }
 .voice-note { flex: 0 0 100%; padding: 2px 4px; color: var(--text-2); font-size: 13px; }
 .voice-note .linkish { padding: 0 0 0 4px; color: var(--accent); font-size: 13px; }
@@ -147,6 +146,7 @@ textarea[readonly] { border-color: rgba(248, 81, 73, 0.45); }
 #say textarea, .field textarea, .field select { flex: 1; min-width: 0; width: 100%; padding: 11px 14px; background: var(--bg-input); border: 1px solid var(--line); border-radius: 12px; outline: none; resize: none; font: inherit; color: inherit; line-height: 1.4; }
 #say textarea:focus, .field textarea:focus, .field select:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
 .field select { min-height: 46px; color-scheme: dark; }
+.field select:disabled { opacity: 0.55; }
 a.btn.link { display: flex; align-items: center; justify-content: center; text-decoration: none; color: inherit; }
 
 /* ---------- a trail ---------- */
