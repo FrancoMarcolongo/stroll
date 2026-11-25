@@ -36,6 +36,10 @@
 // Nothing here knows about Stroll's state: app.js hands it the people.
 (function () {
   const MIN_CLEAR_W = 84; // a clearing needs this much width
+  // The map's lettering (its face is in styles.css), asked for up front: a canvas doesn't load a
+  // font by itself. Until it's in, the system font stands in.
+  const MAP_FONT = '"Pixelify Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
+  if (document.fonts) for (const weight of [500, 600]) document.fonts.load(`${weight} 12px "Pixelify Sans"`).catch(() => {});
   const MIN_DWELL = 3000; // ms at a work spot before walking to the next, so it doesn't dart about
   const LINGER = 3 * 60 * 1000; // how long someone who's finished stays in the hub once seen
   const HEAD_H = 22; // the strip: a head and shoulders per person
@@ -306,13 +310,14 @@
       focus: { board: [21, top + 20], rock: [196, top + 18], fire: [fx, fy], lounge: [lx, ly], gate: [22, gs + 22], pond: [px, py] },
       // What nobody stands on: [x, y, w, h].
       solid: [[2, top + 8, 38, 30], [178, top + 6, 37, 24], [fx - 8, fy - 5, 17, 11], [lx - 29, ly - 1, 58, 5], [2, gs + 12, 40, 18]],
-      entries: { top: [74, 146], bottom: [78, 142] }, // where paths from above and below may join the loop
+      entries: { top: [60, 160], bottom: [62, 158] }, // where paths from above and below may join the loop
     };
   }
   const HUB_W = 220;
   const HUB_MIN = 190; // the hub's height grows with the room there is, between these
-  const HUB_MAX = 290;
-  const GAP = 24; // between a clearing and the hub's meadow
+  const HUB_MAX = 220;
+  const GAP = 24; // between a clearing and the hub's meadow, at least
+  const EXTRA_GAP = 48; // and at most this much more, from room to spare: the paths' to curve down in
   const ROW_NEED = 86; // height a row of clearings needs
   const TWO_ROW_NEED = 138; // and two rows of them
 
@@ -407,38 +412,190 @@
     g.fillStyle = 'rgba(8,20,14,0.3)'; g.fillRect(x + 1, y + 4, w, 1);
   }
 
-  // A winding path between two points, as a line of points about 3 art pixels apart.
-  function winding(x0, y0, x1, y1, seed, most = 7) {
-    const len = Math.hypot(x1 - x0, y1 - y0);
-    const waves = len > 80 ? 2 : 1;
-    const amp = Math.min(most, len / 8) * (seed % 2 ? 1 : -1);
-    const n = Math.max(2, Math.ceil(len / 3));
-    const pts = [];
-    for (let i = 0; i <= n; i += 1) {
-      const s = i / n;
-      const e = s * s * (3 - 2 * s);
-      pts.push([x0 + (x1 - x0) * e + amp * Math.sin(Math.PI * s) * Math.sin(Math.PI * waves * s), y0 + (y1 - y0) * s]);
-    }
-    return pts;
+  // The tightest a path may bend: no turn on it is sharper than a circle this wide (its radius, in
+  // art pixels).
+  const MIN_BEND = 14;
+  // How sharply a line bends at point i, against MIN_BEND: over 1, too sharp.
+  function turnAt(pts, i) {
+    const a = pts[i - 1]; const b = pts[i]; const c = pts[i + 1];
+    const ux = b[0] - a[0]; const uy = b[1] - a[1]; const vx = c[0] - b[0]; const vy = c[1] - b[1];
+    const turn = Math.abs(Math.atan2(ux * vy - uy * vx, ux * vx + uy * vy));
+    return (turn * MIN_BEND) / ((Math.hypot(ux, uy) + Math.hypot(vx, vy)) / 2 || 1);
   }
-  // Where each clearing's paths join the loop, by how many clearings share a side: for each
-  // clearing, the points along the loop's side (0 its left end, 1 its right) its paths go to. Never
-  // straight in front of it, so the trails' paths cross on the way in; two points make a fork.
-  const ROUTES = {
-    1: [[[0.2, 0.8]], [[0.05, 0.6]], [[0.4, 0.95]]],
-    2: [[[0.8], [0.2]], [[0.65], [0.35]], [[0.9], [0.1, 0.55]], [[0.45, 0.95], [0.1]]],
-    3: [[[0.9], [0.5], [0.1]], [[0.5], [0.9], [0.1]], [[0.65], [0.05, 0.95], [0.35]], [[0.9], [0.1], [0.5]]],
+  // How sharp the sharpest bend of a line is, against MIN_BEND.
+  function sharpness(pts) {
+    let most = 0;
+    for (let i = 1; i < pts.length - 1; i += 1) most = Math.max(most, turnAt(pts, i));
+    return most;
+  }
+  // Rounds off the bends sharper than MIN_BEND, a little at a time and only there, so the rest of
+  // the line keeps its shape; its ends stay put. Each round looks again only next to what moved.
+  function soften(pts) {
+    const out = pts.map(p => [p[0], p[1]]);
+    let look = [];
+    for (let i = 1; i < out.length - 1; i += 1) if (turnAt(out, i) > 1) look.push(i);
+    for (let pass = 0; pass < 80 && look.length; pass += 1) {
+      const next = new Set();
+      for (const i of look) {
+        if (turnAt(out, i) <= 1) continue;
+        const a = out[i - 1]; const c = out[i + 1];
+        out[i] = [(out[i][0] + (a[0] + c[0]) / 2) / 2, (out[i][1] + (a[1] + c[1]) / 2) / 2];
+        for (const j of [i - 1, i, i + 1]) if (j >= 1 && j < out.length - 1) next.add(j);
+      }
+      look = [...next].sort((x, y) => x - y);
+    }
+    return out;
+  }
+
+  // How each side's paths are chosen (side() in plan): each path tries the shapes VARIANTS give
+  // it, and takes the one that, with the shapes the others have, costs least. Nothing is forced:
+  // a cost is a pull.
+  // How much each of a path's shapes sways, against its own (the first).
+  const VARIANTS = [1, 1, 0.7, 1.25, 0.7];
+  const COST = {
+    slant: 20, // per crossing, by the square of the cosine of its angle: 0 square, 20 running along
+    knot: 12, // per crossing of two paths within KNOT of another of theirs: they tie a knot
+    touch: 16, // per 10 art pixels two paths run within NEAR of each other, away from a crossing
+    other: 1, // for taking a shape other than its own
   };
-  // More on a side: all to the far side (a star), turned round by half, or swapped in pairs.
-  function routesFor(n, seed) {
-    if (ROUTES[n]) return ROUTES[n][seed % ROUTES[n].length];
-    const at = i => [(i + 0.5) / n];
-    const ways = [
-      Array.from({ length: n }, (_, i) => at(n - 1 - i)),
-      Array.from({ length: n }, (_, i) => at((i + Math.floor(n / 2)) % n)),
-      Array.from({ length: n }, (_, i) => at((i ^ 1) < n ? i ^ 1 : i)),
-    ];
-    return ways[seed % ways.length];
+  const NEAR = 8; // closer than this, centre to centre, and two paths look as if they touch
+  const KNOT = 40; // two crossings of the same two paths closer than this make an eye, or a knot
+
+  // A line's points by 8-pixel cell, to find what's near a point quickly.
+  const cellKey = (i, j) => (i + 1024) * 4096 + j + 1024;
+  function cells(pts) {
+    const grid = new Map();
+    pts.forEach(([x, y], i) => {
+      const k = cellKey(Math.floor(x / 8), Math.floor(y / 8));
+      if (!grid.has(k)) grid.set(k, []);
+      grid.get(k).push(i);
+    });
+    return { pts, grid };
+  }
+  // Calls visit(i) for each of the line's points in the cells round (x, y), until it returns true.
+  function around({ grid }, x, y, visit) {
+    const cx = Math.floor(x / 8); const cy = Math.floor(y / 8);
+    for (let j = cy - 1; j <= cy + 1; j += 1) {
+      for (let i = cx - 1; i <= cx + 1; i += 1) {
+        const l = grid.get(cellKey(i, j));
+        if (l) for (const k of l) if (visit(k)) return true;
+      }
+    }
+    return false;
+  }
+  // How line a (from cells()) meets line b: { slant: the squares of the cosines of the angles they
+  // cross at, added up; knots: crossings within KNOT of another of theirs; touch: art pixels of a
+  // that run within NEAR of b, away from where they cross }. Directions are taken over a few steps either side, so a single
+  // wobble doesn't count.
+  function relation(a, b) {
+    const heading = (p, i) => { const [x0, y0] = p[Math.max(0, i - 2)]; const [x1, y1] = p[Math.min(p.length - 1, i + 3)]; const l = Math.hypot(x1 - x0, y1 - y0) || 1; return [(x1 - x0) / l, (y1 - y0) / l]; };
+    let slant = 0;
+    const at = [];
+    for (let i = 0; i < a.pts.length - 1; i += 1) {
+      const [ax, ay] = a.pts[i]; const [bx, by] = a.pts[i + 1];
+      around(b, (ax + bx) / 2, (ay + by) / 2, j => {
+        if (j >= b.pts.length - 1) return false;
+        const hit = crossing(a.pts[i], a.pts[i + 1], b.pts[j], b.pts[j + 1]);
+        if (!hit) return false;
+        const [ux, uy] = heading(a.pts, i);
+        const [vx, vy] = heading(b.pts, j);
+        slant += (ux * vx + uy * vy) ** 2;
+        at.push([ax + (bx - ax) * hit[0], ay + (by - ay) * hit[0]]);
+        return false;
+      });
+    }
+    let touch = 0;
+    for (const [x, y] of a.pts) {
+      if (at.some(([px, py]) => Math.hypot(x - px, y - py) < 14)) continue;
+      if (around(b, x, y, j => Math.hypot(b.pts[j][0] - x, b.pts[j][1] - y) < NEAR)) touch += 2.5;
+    }
+    const knots = at.filter((p, i) => at.some((q, j) => j !== i && Math.hypot(p[0] - q[0], p[1] - q[1]) < KNOT)).length;
+    return { slant, knots, touch };
+  }
+
+  // A path that flows from (x0, y0), a clearing's edge, down to (x1, y1) on the loop, the way a
+  // stream finds its way downhill: it sets off head on, toward the hub, and comes in head on, and
+  // in between meanders gently, two or three bends, by amounts its seed picks, so each trail's path
+  // has a shape of its own and keeps it. No bend is sharper than MIN_BEND. `ok(x, y)` says where it
+  // may go; where the meander takes it somewhere it may not, or bends it too sharply even rounded
+  // off, it's calmed until it fits, down to none (a plain curve). Points about 2.5 art pixels apart.
+  function wander(x0, y0, x1, y1, seed, ok, { most = 16, gain = 1 } = {}) {
+    const dir = Math.sign(y1 - y0) || 1;
+    const r = rng(seed);
+    // The curve it meanders about: leaves straight toward the hub, arrives straight, and turns in
+    // between using most of the height there is, so its turns aren't tight even when it has far
+    // to go sideways (it never overshoots up or down). How much it leans on its first turn or its
+    // last is its own, so it does its sideways stretch higher up or lower down.
+    const bend = ([px, py], [qx, qy], a, b) => {
+      const h = Math.abs(qy - py);
+      const c1 = [px, py + dir * h * a];
+      const c2 = [qx, qy - dir * h * b];
+      return {
+        at: t => {
+          const u = 1 - t; const a0 = u * u * u; const a1 = 3 * u * u * t; const a2 = 3 * u * t * t; const a3 = t * t * t;
+          return [a0 * px + a1 * c1[0] + a2 * c2[0] + a3 * qx, a0 * py + a1 * c1[1] + a2 * c2[1] + a3 * qy];
+        },
+        slope: t => {
+          const u = 1 - t; const b0 = 3 * u * u; const b1 = 6 * u * t; const b2 = 3 * t * t;
+          return [b0 * (c1[0] - px) + b1 * (c2[0] - c1[0]) + b2 * (qx - c2[0]), b0 * (c1[1] - py) + b1 * (c2[1] - c1[1]) + b2 * (qy - c2[1])];
+        },
+      };
+    };
+    const lean = () => 0.75 + r() * 0.2;
+    const { at: base, slope } = bend([x0, y0], [x1, y1], lean(), lean());
+    // How far along the curve each t is, in art pixels.
+    const along = [0];
+    for (let i = 1, p = base(0); i <= 100; i += 1) { const q = base(i / 100); along.push(along[i - 1] + Math.hypot(q[0] - p[0], q[1] - p[1])); p = q; }
+    const len = along[100];
+    const lenAt = t => { const f = t * 100; const i = Math.min(99, Math.floor(f)); return along[i] + (along[i + 1] - along[i]) * (f - i); };
+    const halves = Math.max(2, Math.min(3, Math.round(len / 70) + (r() < 0.5 ? 0 : 1)));
+    const skew = r() * 0.6 - 0.3; // its bends a little early or late
+    const second = r() * 0.25; // a smaller sway on the big one, so it isn't a plain wave
+    // Gentle: no steeper than its bends are long, so it never doubles back; `gain` sways it more.
+    const amp = Math.min(most, len / 6, 0.18 * (2 * len) / halves) * gain * (0.6 + r() * 0.4) * (r() < 0.5 ? -1 : 1);
+    // Calm for its first steps and its last ones, so it leaves and comes into the loop cleanly.
+    const calm = l => { const e = Math.max(0, Math.min(1, l / 14, (len - l) / 36)); return e * e * (3 - 2 * e); };
+    const sway = t => {
+      const u = t + (skew * Math.sin(Math.PI * t)) / Math.PI;
+      return calm(lenAt(t)) * (Math.sin(Math.PI * halves * u) + second * Math.sin(Math.PI * (2 * halves + 1) * u + 1.1));
+    };
+    // Sampled finely enough for its fastest stretch (the curve runs faster at its ends).
+    const fastest = Math.max(...along.slice(1).map((l, i) => l - along[i])) * 100;
+    const line = k => {
+      const n = Math.max(8, Math.ceil((fastest * (1 + (k * Math.abs(amp) * halves * Math.PI) / len)) / 1.6));
+      const pts = [];
+      for (let i = 0; i <= n; i += 1) {
+        const t = i / n;
+        const [bx, by] = base(t);
+        const [sx, sy] = slope(t);
+        const sl = Math.hypot(sx, sy) || 1;
+        const s = amp * k * sway(t);
+        pts.push([bx - (sy / sl) * s, by + (sx / sl) * s]);
+      }
+      // Evenly spaced, about 2.5 apart; rather than a stub of a last step, the point before the
+      // end moves to halfway between its neighbours.
+      const out = [pts[0]];
+      let since = 0;
+      for (let i = 1; i < pts.length - 1; i += 1) {
+        since += Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]);
+        if (since >= 2.5) { out.push(pts[i]); since = 0; }
+      }
+      const last = pts[pts.length - 1];
+      const before = out[out.length - 1];
+      if (out.length > 2 && Math.hypot(last[0] - before[0], last[1] - before[1]) < 1.25) {
+        const prior = out[out.length - 2];
+        out[out.length - 1] = [(prior[0] + last[0]) / 2, (prior[1] + last[1]) / 2];
+      }
+      out.push(last);
+      return out;
+    };
+    for (let k = 1; k > 0.04; k *= 0.8) {
+      const raw = line(k);
+      if (k > 0.1 && sharpness(raw) > 3) continue; // too sharp to round off well: sway less
+      const pts = soften(raw);
+      if (pts.every(([x, y]) => ok(x, y)) && sharpness(pts) <= 1.15) return pts;
+    }
+    return soften(line(0));
   }
 
   // ---------- where everything goes ----------
@@ -462,57 +619,106 @@
     const needT = need(aw, nt);
     const needB = need(aw, nb);
     const hh = Math.max(HUB_MIN, Math.min(HUB_MAX, ah - needT - needB - 4));
-    const spare = ah - hh - needT - needB;
-    const hy = !nt ? Math.floor((ah - hh) / 2) : needT + Math.floor(spare / 2);
+    // Height left over goes first to the paths: each side's clearings move out from the hub (up to
+    // EXTRA_GAP), so their paths have room to curve down to it; the rest to the woods beyond.
+    let spare = ah - hh - needT - needB;
+    const sides = (nt ? 1 : 0) + (nb ? 1 : 0);
+    const extra = sides ? Math.max(0, Math.min(EXTRA_GAP, Math.floor((spare - 4) / sides))) : 0;
+    spare -= extra * sides;
+    const gapOf = top => GAP + ((top ? nt : nb) ? extra : 0);
+    const hy = !nt ? Math.floor((ah - hh) / 2) : needT + extra + Math.floor(spare / 2);
     const hx = Math.floor((aw - HUB_W) / 2);
     const hub = hubOf(hh);
     const clearings = [];
     const side = (items, top) => {
       if (!items.length) return;
       const n = items.length;
-      const seedAll = hash(items.map(i => i.key).join());
+      const gap = gapOf(top);
       const edge = top ? hy : hy + hh; // the hub meadow's edge on this side
       const toward = top ? -1 : 1; // away from the hub
       const ey = hy + (top ? hub.top : hub.bot);
       const [e0, e1] = top ? hub.entries.top : hub.entries.bottom;
-      const entry = f => hx + Math.round(e0 + (e1 - e0) * f); // f: 0 the left end of the loop's side, 1 the right
-      const exitY = (cy, ry) => cy - toward * (ry - 3); // where its paths leave the clearing, toward the hub
-      const add = (it, cx, cy, rx, ry, paths) => clearings.push({ ...it, cx, cy, rx, ry, top, seed: hash(it.key), paths });
+      const exitY = (cy, ry) => cy - toward * (ry - 3); // where its path leaves the clearing, toward the hub
+      // Where the clearings go. A far-row one's path first comes down the gap it sits over, to
+      // `via`, past the near row.
+      const spots = [];
       if (rowFits(aw, n)) {
         const cw = aw / n;
         const room = top ? hy : ah - hy - hh;
-        const ry = Math.max(26, Math.min(34, Math.floor((room - GAP - 10) / 2)));
-        const routes = routesFor(n, seedAll);
-        items.forEach((it, i) => {
-          const rx = Math.max(30, Math.min(50, Math.floor(cw / 2) - 6));
-          const cx = Math.round(cw * (i + 0.5));
-          const cy = edge + toward * (GAP + ry);
-          add(it, cx, cy, rx, ry, routes[i].map((f, j) => winding(cx, exitY(cy, ry), entry(f), ey, hash(it.key) + j)));
-        });
-        return;
+        const ry = Math.max(26, Math.min(34, Math.floor((room - gap - 10) / 2)));
+        const rx = Math.max(30, Math.min(50, Math.floor(cw / 2) - 6));
+        items.forEach((it, i) => spots.push({ it, cx: Math.round(cw * (i + 0.5)), cy: edge + toward * (gap + ry), rx, ry }));
+      } else {
+        // Two rows: the near one narrower, to leave gaps; the far one over the gaps.
+        const m = rowMax(aw);
+        const far = n - m;
+        const cw = aw / m;
+        const ry = 27;
+        const nearCy = edge + toward * (gap + ry);
+        const farCy = top ? Math.max(10 + ry, nearCy - 2 * ry - 6) : Math.min(ah - 10 - ry, nearCy + 2 * ry + 6);
+        const via = nearCy - toward * (ry + 6);
+        items.slice(0, m).forEach((it, i) => spots.push({ it, cx: Math.round(cw * (i + 0.5)), cy: nearCy, rx: Math.max(28, Math.min(46, Math.floor(cw / 2) - 14)), ry }));
+        const gaps = far === 1 ? [Math.round(m / 2)] : Array.from({ length: far }, (_, k) => 1 + Math.round((k * (m - 2)) / (far - 1)));
+        items.slice(m).forEach((it, k) => spots.push({ it, cx: Math.round(cw * gaps[k]), cy: farCy, rx: Math.max(28, Math.min(46, Math.floor(cw / 2) - 4)), ry, via }));
       }
-      // Two rows: the near one narrower, to leave gaps; the far one in the gaps, its paths coming
-      // down through them and over to the other end of the loop's side, across the near ones'.
-      const m = rowMax(aw);
-      const far = n - m;
-      const cw = aw / m;
-      const ry = 27;
-      const nearCy = edge + toward * (GAP + ry);
-      const farCy = top ? Math.max(10 + ry, nearCy - 2 * ry - 6) : Math.min(ah - 10 - ry, nearCy + 2 * ry + 6);
-      const pastY = nearCy - toward * (ry + 6);
-      const near = items.slice(0, m);
-      const nearRoutes = routesFor(m, seedAll);
-      near.forEach((it, i) => {
-        const cx = Math.round(cw * (i + 0.5));
-        add(it, cx, nearCy, Math.max(28, Math.min(46, Math.floor(cw / 2) - 14)), ry, nearRoutes[i].map((f, j) => winding(cx, exitY(nearCy, ry), entry(f), ey, hash(it.key) + j)));
+      // Each path comes into the loop's side about where its clearing sits across the map, so it
+      // flows mostly down to it, not across to a crowd in the middle; each side shifted a little
+      // and each path a little more, so clearings placed alike don't get mirrored paths. Now and
+      // then two neighbours swap places (by their trails, so always the same ones): their paths
+      // cross on the way.
+      const order = [...spots].sort((a, b) => a.cx - b.cx);
+      const sideRand = rng(hash(order.map(s => s.it.key).join()));
+      const shift = (sideRand() - 0.5) * 0.1;
+      const [c0, c1] = [order[0].cx, order[order.length - 1].cx];
+      const across = cx => (c1 > c0 ? 0.04 + (0.92 * (cx - c0)) / (c1 - c0) : 0.5); // the outermost to the loop's corners
+      const slots = order.map(s => across(s.cx) + shift + ((hash(s.it.key) % 9) - 4) * 0.008);
+      for (let i = 0; i + 1 < order.length; i += 1) if (sideRand() < 0.35) { [order[i], order[i + 1]] = [order[i + 1], order[i]]; i += 1; }
+      order.forEach((s, rank) => { s.entry = hx + Math.round(e0 + (e1 - e0) * Math.max(0.02, Math.min(0.98, slots[rank]))); });
+      // The shapes each path could take, all fine to walk: its own first, then others that sway
+      // as much or more.
+      const shapes = spots.map(s => {
+        const y0 = exitY(s.cy, s.ry);
+        // Not into another clearing, not back past where it set off, not past the loop, nor off the map.
+        const others = spots.filter(o => o !== s);
+        const ok = from => (x, y) => x >= 3 && x <= aw - 3 && (y - from) * -toward >= -1 && (ey - y) * -toward >= -0.5
+          && others.every(o => ((x - o.cx) / (o.rx + 5)) ** 2 + ((y - o.cy) / (o.ry + 5)) ** 2 > 1);
+        return VARIANTS.map((gain, j) => {
+          const seed = hash(s.it.key) + j * 7919;
+          if (s.via == null) return cells(wander(s.cx, y0, s.entry, ey, seed, ok(y0), { gain }));
+          const rest = wander(s.cx, s.via, s.entry, ey, seed + 1, ok(s.via), { gain });
+          return cells(soften(wander(s.cx, y0, s.cx, s.via, seed, ok(y0), { most: 3 }).concat(rest.slice(1))));
+        });
       });
-      const gaps = far === 1 ? [Math.round(m / 2)] : Array.from({ length: far }, (_, k) => 1 + Math.round((k * (m - 2)) / (far - 1)));
-      items.slice(m).forEach((it, k) => {
-        const cx = Math.round(cw * gaps[k]);
-        const seed = hash(it.key);
-        add(it, cx, farCy, Math.max(28, Math.min(46, Math.floor(cw / 2) - 4)), ry,
-          [winding(cx, exitY(farCy, ry), cx, pastY, seed, 2).concat(winding(cx, pastY, entry(1 - cx / aw), ey, seed + 1, 3).slice(1))]);
-      });
+      // Each path takes the shape that costs least with the others' (COST): crossings lean toward
+      // square, two paths don't cross twice close together (a knot), and paths don't run alongside
+      // each other close enough to look as if they touch.
+      const memo = new Map();
+      const between = (i, j, o, pj) => {
+        const k = `${i}.${j}.${o}.${pj}`;
+        if (!memo.has(k)) memo.set(k, relation(shapes[i][j], shapes[o][pj]));
+        return memo.get(k);
+      };
+      const pick = spots.map(() => 0);
+      const cost = (i, j) => {
+        let c = j ? COST.other : 0;
+        pick.forEach((pj, o) => {
+          if (o === i) return;
+          const r = between(i, j, o, pj);
+          c += COST.slant * r.slant + COST.knot * r.knots + (COST.touch * r.touch) / 10;
+        });
+        return c;
+      };
+      for (let pass = 0; pass < 4; pass += 1) {
+        let moved = false;
+        spots.forEach((_, i) => {
+          let best = pick[i];
+          let low = cost(i, best);
+          for (let j = 0; j < shapes[i].length; j += 1) { const c = cost(i, j); if (c < low - 1e-9) { low = c; best = j; } }
+          if (best !== pick[i]) { pick[i] = best; moved = true; }
+        });
+        if (!moved) break;
+      }
+      spots.forEach((s, i) => clearings.push({ ...s.it, cx: s.cx, cy: s.cy, rx: s.rx, ry: s.ry, top, seed: hash(s.it.key), paths: [shapes[i][pick[i]].pts] }));
     };
     side(list.slice(0, nt), true);
     side(list.slice(nt), false);
@@ -1781,8 +1987,8 @@
       ctx.textBaseline = 'middle';
       ctx.textAlign = 'center';
       for (const c of world.clearings) {
-        const size = Math.max(9, Math.min(12, Math.floor(c.sign.h * css * 0.62)));
-        ctx.font = `700 ${size}px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif`;
+        const size = Math.max(10, Math.min(14, Math.floor(c.sign.h * css * 0.66)));
+        ctx.font = `600 ${size}px ${MAP_FONT}`;
         ctx.fillStyle = '#f6e7c8';
         ctx.fillText(fit(c.title, c.sign.w * css - 8), (c.sign.x + c.sign.w / 2) * css, (c.sign.y + c.sign.h / 2) * css + 0.5);
       }
@@ -1794,7 +2000,7 @@
         if (w.chat && w.box && !w.unplaced && now >= w.chat.from && now < w.chat.to && (!w.legs.length || w.hello > now)) speech(w, w.chat.text);
       }
       if (!people.length) {
-        ctx.font = '12px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
+        ctx.font = `500 12px ${MAP_FONT}`;
         const text = 'Nobody’s out yet. Click a tent to start a session on its trail.';
         ctx.fillStyle = 'rgba(14,17,22,0.78)';
         const tw = Math.min(geo.W - 16, ctx.measureText(text).width + 20);
@@ -1808,7 +2014,7 @@
     // What someone says when they stop to chat: a few words in a bubble over their head.
     function speech(w, text) {
       const { css } = geo;
-      ctx.font = '500 10.5px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
+      ctx.font = `500 12px ${MAP_FONT}`;
       const line = fit(text, 180);
       const tw = Math.round(ctx.measureText(line).width) + 14;
       const hx = (w.box[0] + w.box[2] / 2) * css;
@@ -1831,7 +2037,7 @@
     }
     function nameTag(w, color) {
       const { css } = geo;
-      ctx.font = '600 11px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
+      ctx.font = `600 12px ${MAP_FONT}`;
       const text = fit(w.p.title || 'Untitled session', 150);
       const tw = ctx.measureText(text).width + 12;
       const cx = Math.min(Math.max((w.box[0] + w.box[2] / 2) * css, tw / 2 + 4), geo.W - tw / 2 - 4);
@@ -2021,5 +2227,6 @@
     };
   }
 
-  window.Journey = { create, looksOf, poseOf };
+  // plan and fits: where everything goes on a map of a given size, for the tests.
+  window.Journey = { create, looksOf, poseOf, plan, fits };
 }());

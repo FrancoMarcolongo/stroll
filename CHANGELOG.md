@@ -2,6 +2,16 @@
 
 Stroll shows the new sections here once, after an update. **Settings › Updates › What's new** shows them all again.
 
+## 0.19.0 — 2026-11-25
+
+### Paths like streams
+- **Each trail's path flows down to the hub like a stream,** from its camp to about where it sits across the map, in gentle bends, none of them sharp. Every trail's path has a shape of its own and keeps it.
+- **Now and then two paths cross,** halfway down where there's room, close to square, rather than all bunching up just before the loop.
+- The hub is a little shorter, and the camps sit a little further out, to give the paths room.
+
+### Lettering
+- **The map's signs, speech bubbles and names are in Pixelify Sans,** a pixel typeface made to stay readable, to go with the map's pixel art.
+
 ## 0.18.0 — 2026-11-25
 
 ### Sessions come back on their own

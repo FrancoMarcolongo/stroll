@@ -1,3 +1,6 @@
+/* The journey's lettering: Pixelify Sans (SIL Open Font License, fonts/PixelifySans-OFL.txt), a
+   pixel face made to stay readable, to go with the map's pixel art. */
+@font-face { font-family: 'Pixelify Sans'; src: url('fonts/PixelifySans.ttf') format('truetype'); font-weight: 400 700; font-display: swap; }
 :root {
   --bg: #0e1116;
   --bg-side: #11151c;
@@ -95,7 +98,7 @@ body.resizing #terminals { pointer-events: none; }
 #app[data-side="strip"] #dock-widen svg { transform: scaleX(-1); }
 .journey-canvas { display: block; }
 .journey-tip { position: absolute; z-index: 5; max-width: 240px; display: grid; gap: 3px; padding: 8px 10px; background: var(--bg-raised); border: 1px solid var(--line); border-radius: 9px; box-shadow: var(--shadow); font-size: 12px; color: var(--text-2); pointer-events: none; overflow-wrap: anywhere; }
-.journey-tip b { color: var(--text); font-weight: 600; }
+.journey-tip b { color: var(--text); font-family: 'Pixelify Sans', var(--font); font-weight: 600; font-size: 14px; letter-spacing: 0.2px; }
 .journey-tip-status { font-size: 11.5px; color: var(--text-3); }
 .journey-tip-status.working { color: #6fdd7f; }
 .journey-tip-status.waiting { color: #f2bf4a; }
