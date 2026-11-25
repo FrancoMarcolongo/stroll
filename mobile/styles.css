@@ -56,9 +56,9 @@ button.row:active { background: var(--bg-hover); }
 .check { flex: none; width: 24px; height: 24px; border-radius: 50%; border: 2px solid var(--text-3); background: none; padding: 0; }
 .check.on { background: var(--accent); border-color: var(--accent); }
 
-#todo-add { display: flex; gap: 8px; margin-bottom: 8px; }
-#todo-add input, .field input { flex: 1; min-width: 0; width: 100%; min-height: 46px; padding: 0 14px; background: var(--bg-input); border: 1px solid var(--line); border-radius: 12px; outline: none; }
-#todo-add input:focus, .field input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+#todo-add, #t-todo-add { display: flex; gap: 8px; margin-bottom: 8px; }
+#todo-add input, #t-todo-add input, .field input { flex: 1; min-width: 0; width: 100%; min-height: 46px; padding: 0 14px; background: var(--bg-input); border: 1px solid var(--line); border-radius: 12px; outline: none; }
+#todo-add input:focus, #t-todo-add input:focus, .field input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
 .btn { min-height: 46px; padding: 0 18px; border-radius: 12px; border: 1px solid var(--line); background: var(--bg-raised); font-weight: 600; }
 .btn.primary { background: var(--accent); border-color: var(--accent); color: #1f150a; }
 .btn.danger { color: #ff8a83; border-color: rgba(248, 81, 73, 0.45); }
@@ -143,6 +143,21 @@ textarea[readonly] { border-color: rgba(248, 81, 73, 0.45); }
 #say textarea:focus, .field textarea:focus, .field select:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
 .field select { min-height: 46px; color-scheme: dark; }
 a.btn.link { display: flex; align-items: center; justify-content: center; text-decoration: none; color: inherit; }
+
+/* ---------- a trail ---------- */
+.row .badge { flex: none; min-width: 22px; height: 22px; padding: 0 7px; border-radius: 11px; background: var(--accent-soft); color: var(--accent); font-size: 12.5px; font-weight: 650; line-height: 22px; text-align: center; }
+#trail section h3 { margin-top: 6px; }
+#trail .result .md .empty { color: var(--text-3); }
+#trail .hint .linkish { padding: 0 0 0 4px; color: var(--accent); font-size: 12.5px; }
+.suggestions { display: grid; gap: 10px; padding: 14px; border-radius: 14px; background: var(--accent-soft); border: 1px solid rgba(217, 162, 107, 0.35); }
+.suggestions h3, #trail .suggestions h3 { margin: 0; color: var(--accent); }
+.sugg { display: grid; gap: 8px; padding-top: 10px; border-top: 1px solid rgba(217, 162, 107, 0.2); }
+.sugg:first-of-type { padding-top: 0; border-top: 0; }
+.sugg textarea { width: 100%; padding: 10px 12px; background: var(--bg-input); border: 1px solid var(--line); border-radius: 10px; outline: none; resize: vertical; font: 14px/1.45 var(--font); color: inherit; }
+.sugg textarea:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.sugg-old { color: var(--text-2); font-size: 13px; }
+.sugg-old del { color: #ff8a83; }
+.field .hint:empty { display: none; }
 
 /* ---------- the app, offered to a browser ---------- */
 .getapp { display: grid; gap: 10px; padding: 12px 16px; background: var(--bg-raised); border-bottom: 1px solid var(--line-soft); }

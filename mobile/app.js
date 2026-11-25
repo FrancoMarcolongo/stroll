@@ -45,6 +45,10 @@
   const run = id => S.data?.runs.find(r => r.id === id);
   const session = id => S.data?.sessions.find(s => s.id === id);
   const workflow = id => (S.data?.workflows || []).find(w => w.id === id);
+  const trail = id => (id ? (S.data?.trails || []).find(t => t.id === id) : undefined);
+  const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
+  const byOrder = (a, b) => (a.order ?? 0) - (b.order ?? 0);
+  const activeTrails = () => (S.data?.trails || []).filter(t => t.status !== 'archived').sort(byOrder);
   const computer = () => link.ready?.name || link.computer?.name || 'your computer';
 
   function slotText(iso) {
@@ -100,9 +104,11 @@
   }
 
   // --- navigation: the address keeps the view, so the phone's back button works ---
+  // A new session can come with a trail: #/new/<trail id>.
   function parseHash() {
-    if (location.hash === '#/new') return { type: 'new' };
-    const m = location.hash.match(/^#\/(run|workflow|session)\/([\w-]+)$/);
+    const n = location.hash.match(/^#\/new(?:\/([\w-]+))?$/);
+    if (n) return n[1] ? { type: 'new', id: n[1] } : { type: 'new' };
+    const m = location.hash.match(/^#\/(run|workflow|session|trail)\/([\w-]+)$/);
     return m ? { type: m[1], id: m[2] } : { type: 'home' };
   }
   const hashOf = view => (view.type === 'home' ? '#/' : view.id ? `#/${view.type}/${view.id}` : `#/${view.type}`);
@@ -160,6 +166,7 @@
     if (S.view.type === 'run') renderRun(view);
     else if (S.view.type === 'workflow') renderWorkflow(view, fresh);
     else if (S.view.type === 'session') renderSession(view);
+    else if (S.view.type === 'trail') renderTrail(view);
     else if (S.view.type === 'new') renderNew(view, fresh);
     else renderHome(view);
   }
@@ -167,7 +174,8 @@
   function barHtml() {
     const back = S.view.type !== 'home' && S.data ? '<button class="back" data-act="back" aria-label="Back">‹</button>' : '';
     const title = S.view.type === 'run' ? esc(run(S.view.id)?.title || 'Run') : S.view.type === 'workflow' ? esc(workflow(S.view.id)?.name || 'Workflow')
-      : S.view.type === 'session' ? esc(session(S.view.id)?.title || 'Session') : S.view.type === 'new' ? 'New session' : 'Stroll';
+      : S.view.type === 'session' ? esc(session(S.view.id)?.title || 'Session') : S.view.type === 'trail' ? esc(trail(S.view.id)?.title || 'Trail')
+        : S.view.type === 'new' ? 'New session' : 'Stroll';
     const where = S.view.type === 'home' && link.computer ? `<span class="where">${esc(computer())}</span>` : '';
     return `${back}<h1>${title}</h1>${where}<i class="conn ${esc(link.state)}" aria-label="${esc(link.state)}"></i>`;
   }
@@ -228,13 +236,39 @@
       <span class="main"><span class="title">${esc(t.title)}</span>${t.notes ? `<span class="sub">${esc(t.notes.split('\n')[0])}</span>` : ''}</span></div></li>`;
   const section = (id, title, rows, hint = '') => `<section id="${id}"><h3>${title}${hint ? `<small>${hint}</small>` : ''}</h3><ul class="list">${rows}</ul></section>`;
 
+  // A trail's state comes from its live sessions, its runs and its workflows that are due, with
+  // the same dots as the desktop window. Suggestions for its notes wait on it as a count.
+  const trailSessions = tr => S.data.sessions.filter(s => s.trailId === tr.id);
+  const trailRuns = tr => S.data.runs.filter(r => r.trailId === tr.id);
+  const trailTodos = tr => S.data.todos.filter(t => t.trailId === tr.id);
+  const trailWorkflows = tr => (S.data.workflows || []).filter(w => w.trailId === tr.id);
+  function trailDot(tr) {
+    const dots = [...trailSessions(tr).filter(s => s.live).map(sessionDot), ...trailRuns(tr).map(runDot),
+      ...trailWorkflows(tr).map(w => (w.due && !w.due.runId ? 'waiting' : 'none'))];
+    return ['waiting', 'idle', 'working', 'bg'].find(d => dots.includes(d)) || 'none';
+  }
+  const lastActivity = list => list.map(x => x.lastActivityAt || x.finishedAt || x.startedAt).filter(Boolean).sort().pop() || null;
+  function trailSub(tr) {
+    const sugs = (tr.suggestions || []).length;
+    if (sugs) return `${plural(sugs, 'suggestion')} for the notes`;
+    if (tr.condense?.status === 'ready') return 'Shorter notes to review';
+    const live = trailSessions(tr).filter(s => s.live).length;
+    const open = trailTodos(tr).filter(t => t.status === 'open').length;
+    const bits = [live && plural(live, 'live session'), open && plural(open, 'open to-do')].filter(Boolean);
+    if (bits.length) return bits.join(' · ');
+    const last = lastActivity([...trailSessions(tr), ...trailRuns(tr)]);
+    return last ? `Last session ${agoText(last)}` : 'No sessions yet';
+  }
+  const trailBadge = tr => ((tr.suggestions || []).length ? `<span class="badge">${tr.suggestions.length}</span>` : '');
+  const trailRow = tr => row('trail', tr.id, dot(trailDot(tr)), tr.title, trailSub(tr), `${trailBadge(tr)}<span class="chev">›</span>`);
+
   function renderHome(view) {
     if (!view.querySelector('#home')) {
       setHtml(view, `<div id="home"><div id="h-needs"></div><div id="h-progress"></div>
         <section id="h-todos"><h3>To-dos</h3>
           <form id="todo-add" autocomplete="off"><input name="title" placeholder="Add a to-do" enterkeyhint="done"><button class="btn" type="submit">Add</button></form>
           <ul class="list" id="todo-list"></ul></section>
-        <div id="h-workflows"></div><div id="h-sessions"></div>
+        <div id="h-trails"></div><div id="h-workflows"></div><div id="h-sessions"></div>
         <button class="btn wide" data-open="new">New session</button>
         <div id="h-runs"></div>
         <footer id="foot"></footer></div>`);
@@ -263,6 +297,8 @@
     setHtml($('#h-progress'), progress.length ? section('progress', 'In progress', progress.join('')) : '');
     const open = d.todos.filter(t => t.status === 'open').sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
     setHtml($('#todo-list'), open.map(todoRow).join('') || '<li class="empty">Nothing open.</li>');
+    const trails = activeTrails();
+    setHtml($('#h-trails'), trails.length ? section('trails', 'Trails', trails.map(trailRow).join('')) : '');
     const flows = d.workflows || [];
     setHtml($('#h-workflows'), flows.length ? section('workflows', 'Workflows', flows.map(workflowRow).join('')) : '');
     const quiet = live.filter(s => sessionDot(s) === 'none' && s.status !== 'starting');
@@ -345,6 +381,114 @@
         history.back();
       } catch (_) { button.disabled = false; }
     });
+  }
+
+  // --- a trail: its notes, what its sessions suggest for them, and its work ---
+  // The notes are read here and edited on the computer, where the editor knows the files they
+  // reference. Suggestions are answered here, and can be touched up first.
+  const MIN_CONDENSE_WORDS = 50; // shorter notes have nothing to condense
+  const UNDO_CONDENSE_MS = 7 * 24 * 60 * 60 * 1000;
+  const wordCount = text => (String(text || '').match(/\S+/g) || []).length;
+  const TRAIL_PILL = { waiting: 'Needs you', idle: 'Your turn', working: 'Working', bg: 'Running in the background' };
+  // Where the trail's work is happening now, for "Go to": the session that most needs you, else
+  // a run that does.
+  function trailWork(tr) {
+    const live = trailSessions(tr).filter(s => s.live);
+    if (live.length) {
+      const rank = s => ({ waiting: 0, idle: 1, working: 2, bg: 3 }[sessionDot(s)] ?? 4);
+      live.sort((a, b) => rank(a) - rank(b) || (b.lastActivityAt || '').localeCompare(a.lastActivityAt || ''));
+      return { type: 'session', id: live[0].id };
+    }
+    const runs = trailRuns(tr);
+    const r = runs.find(x => x.pendingApproval) || runs.find(x => x.status === 'running') || runs.find(x => x.unseen && x.status === 'ready');
+    return r ? { type: 'run', id: r.id } : null;
+  }
+
+  function renderTrail(view) {
+    const tr = trail(S.view.id);
+    if (!tr) { setHtml(view, '<section class="center"><h2>That trail is gone</h2><p>It was removed on the computer.</p></section>'); return; }
+    // Built once per visit; state pushes patch the parts. A suggestion being touched up is
+    // never replaced under the finger.
+    if (view.querySelector('#trail')?.dataset.id !== tr.id) {
+      drawn.delete(view);
+      setHtml(view, `<div class="detail" id="trail" data-id="${esc(tr.id)}">
+        <p class="meta" id="t-meta"></p>
+        <div class="actions" id="t-start"></div>
+        <div id="t-suggestions"></div>
+        <div id="t-condensed"></div>
+        <section><h3>Notes<small>every session on this trail starts with them</small></h3>
+          <div class="result"><div class="md" id="t-notes"></div></div><p class="hint" id="t-notes-help"></p></section>
+        <section><h3>To-dos</h3>
+          <form id="t-todo-add" autocomplete="off"><input name="title" placeholder="Add a to-do to this trail" enterkeyhint="done"><button class="btn" type="submit">Add</button></form>
+          <ul class="list" id="t-todos"></ul></section>
+        <div id="t-sessions"></div><div id="t-workflows"></div><div id="t-runs"></div>
+      </div>`);
+      $('#t-todo-add').addEventListener('submit', async e => {
+        e.preventDefault();
+        const input = e.target.elements.title;
+        const title = input.value.trim();
+        if (!title) return;
+        input.value = '';
+        try { await ask('todo:add', { title, trailId: tr.id }); } catch (_) { input.value = title; }
+      });
+    }
+
+    const d = trailDot(tr);
+    const pill = d !== 'none' ? `<span class="pill ${d}">${TRAIL_PILL[d]}</span>` : tr.status === 'archived' ? '<span class="pill">Archived</span>' : '';
+    setHtml($('#t-meta'), `${pill}${esc(shortDir(tr.cwd || S.data.config?.defaultCwd || ''))}`);
+    const work = trailWork(tr);
+    setHtml($('#t-start'), `${work ? `<button class="btn primary" data-open="${work.type}" data-id="${esc(work.id)}">Go to ${work.type === 'session' ? 'session' : 'run'}</button>` : ''}`
+      + `<button class="btn ${work ? '' : 'primary'}" data-open="new" data-id="${esc(tr.id)}">New session</button>`);
+
+    // Suggestions: rebuilt only when the set changes, keeping what was typed into them. One that
+    // replaces lines of the notes shows them, for as long as they're still there.
+    const box = $('#t-suggestions');
+    const sugs = tr.suggestions || [];
+    const swaps = x => Boolean(x.replaces && tr.notes.includes(x.replaces));
+    const key = sugs.map(x => `${x.id}${swaps(x) ? '>' : ''}`).join(',');
+    if (box.dataset.key !== key) {
+      const edits = new Map([...box.querySelectorAll('[data-sugg]')].map(el => [el.dataset.sugg, el.querySelector('textarea').value]));
+      box.dataset.key = key;
+      box.innerHTML = !sugs.length ? '' : `<section class="suggestions"><h3>Suggested for the notes<small>by sessions on this trail</small></h3>
+        ${sugs.map(x => `<div class="sugg" data-sugg="${esc(x.id)}">
+          ${x.replaces ? `<p class="sugg-old">${swaps(x) ? 'Takes the place of' : 'The line it was to replace is gone from the notes, so this adds one. It was'}: <del>${esc(x.replaces)}</del></p>` : ''}
+          <textarea rows="${Math.min(7, Math.max(2, Math.ceil(x.text.length / 36)))}" spellcheck="false">${esc(edits.get(x.id) ?? x.text)}</textarea>
+          <p class="hint">${x.sessionTitle ? `From “${esc(x.sessionTitle)}” · ` : ''}${esc(agoText(x.createdAt))}</p>
+          <div class="actions"><button class="btn primary" data-act="sug-accept">${swaps(x) ? 'Replace in notes' : 'Add to notes'}</button><button class="btn" data-act="sug-dismiss">Dismiss</button></div>
+        </div>`).join('')}</section>`;
+    }
+
+    // A shorter version of the notes that Claude drafted. It's taken or dismissed here; to edit
+    // it first, there's the computer.
+    const c = tr.condense;
+    const stale = c?.status === 'ready' && !tr.notes.startsWith(String(c.base || '').replace(/\s+$/, ''));
+    setHtml($('#t-condensed'), !c ? ''
+      : c.status === 'running' ? '<p class="working">Claude is drafting shorter notes…</p>'
+        : c.status === 'failed' ? `<section class="suggestions"><h3>The notes weren’t condensed</h3><p class="hint">${esc(c.error || '')}</p>
+          <div class="actions"><button class="btn" data-act="condense-start">Try again</button><button class="btn" data-act="condense-dismiss">Dismiss</button></div></section>`
+          : `<section class="suggestions"><h3>Shorter notes to review<small>${Number(c.fromWords || 0).toLocaleString()} → ${Number(c.toWords || 0).toLocaleString()} words${c.auto ? ', the notes got long' : ''}</small></h3>
+          <div class="result"><div class="md">${lightMarkdown(c.text)}</div></div>
+          <p class="hint">${stale ? 'The notes changed since this was drafted.' : 'It replaces the notes below; lines added since are kept. To edit it first, use Stroll on the computer.'}</p>
+          <div class="actions">${stale ? '<button class="btn primary" data-act="condense-start">Condense again</button>' : '<button class="btn primary" data-act="condense-apply">Replace notes</button>'}<button class="btn" data-act="condense-dismiss">Dismiss</button></div></section>`);
+
+    const words = wordCount(tr.notes);
+    setHtml($('#t-notes'), tr.notes.trim() ? lightMarkdown(tr.notes) : '<span class="empty">No notes yet. Write them in Stroll on the computer, or accept what sessions suggest.</span>');
+    const undo = tr.previousNotes && Date.now() - new Date(tr.previousNotes.at).getTime() < UNDO_CONDENSE_MS;
+    setHtml($('#t-notes-help'), `${words ? `${plural(words, 'word')}. ` : ''}Edited on the computer.`
+      + (!c && words >= MIN_CONDENSE_WORDS ? ' <button class="linkish" data-act="condense-start">Condense</button>' : '')
+      + (undo ? ' <button class="linkish" data-act="condense-undo">Undo condense</button>' : ''));
+
+    const open = trailTodos(tr).filter(t => t.status === 'open').sort(byOrder);
+    setHtml($('#t-todos'), open.map(todoRow).join('') || '<li class="empty">No open to-dos on this trail.</li>');
+    const all = trailSessions(tr);
+    const live = all.filter(s => s.live).sort((a, b) => (b.lastActivityAt || '').localeCompare(a.lastActivityAt || ''));
+    const closed = all.length - live.length;
+    setHtml($('#t-sessions'), live.length || closed ? section('t-live', 'Live sessions', live.map(sessionRow).join('') || '<li class="empty">None right now.</li>',
+      closed ? `${closed} closed, on the computer` : '') : '');
+    const flows = trailWorkflows(tr);
+    setHtml($('#t-workflows'), flows.length ? section('t-flows', 'Workflows', flows.map(workflowRow).join('')) : '');
+    const runs = trailRuns(tr).sort((a, b) => (b.startedAt || '').localeCompare(a.startedAt || '')).slice(0, 6);
+    setHtml($('#t-runs'), runs.length ? section('t-runs-list', 'Background runs', runs.map(runRow).join('')) : '');
   }
 
   // --- a session: its terminal as it is on the computer, and a way to answer ---
@@ -950,16 +1094,36 @@
   document.addEventListener('visibilitychange', () => { if (document.visibilityState !== 'visible') voiceDrop(); });
 
   // --- a new session, started from here ---
+  // Opened from a trail (#/new/<trail id>), it goes on that trail and starts in its folder.
+  const dirOption = d => `<option value="${esc(d)}">${esc(shortDir(d))}</option>`;
   function renderNew(view, fresh) {
     if (!fresh && view.querySelector('#new-form')) return;
-    const dirs = [...new Set([...(S.data.recentDirs || []), S.data.config?.defaultCwd].filter(Boolean))];
+    const picked = trail(S.view.id) || null;
+    const trails = activeTrails();
+    if (picked && !trails.includes(picked)) trails.unshift(picked); // an archived one, asked for by name
+    const dirs = [...new Set([picked?.cwd, ...(S.data.recentDirs || []), S.data.config?.defaultCwd].filter(Boolean))];
     setHtml(view, `<form class="detail" id="new-form" autocomplete="off">
       <p class="meta">Starts Claude Code on ${esc(computer())}. It keeps going there whether or not this phone stays connected.</p>
-      <label class="field"><span>Folder</span><select name="cwd">${dirs.map(d => `<option value="${esc(d)}">${esc(shortDir(d))}</option>`).join('')}</select></label>
+      ${trails.length ? `<label class="field"><span>Trail</span><select name="trail"><option value="">None</option>${trails.map(t => `<option value="${esc(t.id)}" ${t === picked ? 'selected' : ''}>${esc(t.title)}</option>`).join('')}</select>
+        <small class="hint" id="new-trail-hint"></small></label>` : ''}
+      <label class="field"><span>Folder</span><select name="cwd">${dirs.map(dirOption).join('')}</select></label>
       <label class="field"><span>First message</span><textarea name="text" rows="5" placeholder="What should Claude do?"></textarea></label>
       <div class="actions bottom">${micButton()}<button class="btn primary" type="submit">Start session</button></div>
     </form>`);
-    $('#new-form').addEventListener('submit', async e => {
+    const nf = $('#new-form');
+    // Picking a trail moves the folder to the trail's, as on the computer.
+    const followTrail = () => {
+      const tr = trail(nf.elements.trail?.value);
+      const hint = $('#new-trail-hint');
+      if (hint) hint.textContent = tr ? 'Claude starts with the trail’s notes.' : '';
+      if (!tr?.cwd) return;
+      const select = nf.elements.cwd;
+      if (![...select.options].some(o => o.value === tr.cwd)) select.insertAdjacentHTML('afterbegin', dirOption(tr.cwd));
+      select.value = tr.cwd;
+    };
+    nf.elements.trail?.addEventListener('change', followTrail);
+    followTrail();
+    nf.addEventListener('submit', async e => {
       e.preventDefault();
       voiceDrop();
       const f = e.target.elements;
@@ -967,7 +1131,9 @@
       const button = e.target.querySelector('[type=submit]');
       button.disabled = true;
       try {
-        const id = await ask('session:create', { cwd: f.cwd.value, firstMessage: text || null, title: text ? text.split('\n')[0].slice(0, 60) : null });
+        const opts = { cwd: f.cwd.value, firstMessage: text || null, title: text ? text.split('\n')[0].slice(0, 60) : null };
+        if (f.trail) opts.trailId = f.trail.value || null;
+        const id = await ask('session:create', opts);
         location.replace(`#/session/${id}`);
       } catch (_) { button.disabled = false; }
     });
@@ -1057,6 +1223,26 @@
         await link.forget();
         go({ type: 'home' });
       }
+    } else if (act === 'sug-accept' || act === 'sug-dismiss') {
+      // A suggestion for a trail's notes: added as it reads in its box now, or dropped.
+      const tr = S.view.type === 'trail' ? trail(S.view.id) : null;
+      const card = el.closest('[data-sugg]');
+      if (!tr || !card) return;
+      const accept = act === 'sug-accept';
+      el.disabled = true;
+      try {
+        await ask('trail:suggestion', tr.id, card.dataset.sugg, accept, accept ? card.querySelector('textarea').value : null);
+        toast(accept ? 'Added to the notes' : 'Dismissed');
+      } catch (_) { el.disabled = false; }
+    } else if (act.startsWith('condense-')) {
+      const tr = S.view.type === 'trail' ? trail(S.view.id) : null;
+      const action = act.slice('condense-'.length); // start | apply | dismiss | undo
+      if (!tr) return;
+      el.disabled = true;
+      try {
+        await ask('trail:condense', tr.id, action);
+        toast({ start: 'Claude is drafting shorter notes', apply: 'Notes replaced', dismiss: 'Dismissed', undo: 'The notes are back as they were' }[action] || 'Done');
+      } catch (_) { el.disabled = false; }
     } else if (r && (act === 'ap-allow' || act === 'ap-deny') && r.pendingApproval) {
       const a = r.pendingApproval;
       withBusy(r.id, async () => { await ask('run:decide', a.id, act === 'ap-allow' ? 'allow' : 'deny', null); toast(act === 'ap-allow' ? 'Allowed once' : 'Denied'); });

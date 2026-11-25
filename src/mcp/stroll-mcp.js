@@ -23,7 +23,7 @@ async function api(method, path, body) {
 const text = obj => ({ content: [{ type: 'text', text: typeof obj === 'string' ? obj : JSON.stringify(obj, null, 2) }] });
 const fail = err => ({ isError: true, content: [{ type: 'text', text: `Stroll is not reachable or refused the call: ${err.message}` }] });
 
-const server = new McpServer({ name: 'stroll', version: '0.13.1' });
+const server = new McpServer({ name: 'stroll', version: '0.14.0' });
 
 const REPLACES = 'The line of the notes this takes the place of, copied from the notes as they are now. The whole line goes, so the new text has to carry what still holds from it.';
 

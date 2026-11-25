@@ -2,6 +2,16 @@
 
 Stroll shows the new sections here once, after an update. **Settings › Updates › What's new** shows them all again.
 
+## 0.14.0 — 2026-11-25
+
+### Trails on the phone
+- **The phone's home page lists your active trails,** each with its dot and how many suggestions are waiting for its notes. Tap one to open its page.
+- **A trail's page** has **Go to session** and **New session**, the suggestions (touch one up in its box, then **Add to notes** or **Dismiss**; a correction shows the line it takes the place of), a shorter draft of the notes to take or dismiss, the notes themselves with **Condense** and **Undo condense**, and the trail's to-dos, live sessions, workflows and runs.
+- **New session has a Trail field.** Opened from a trail, it comes with the trail picked and its folder.
+- The notes are read on the phone and edited on the computer, where the editor knows the files they reference. Deleting and archiving a trail stay on the computer too.
+
+Nothing to install on the phone: the app loads the new version the next time it's opened.
+
 ## 0.13.1 — 2026-11-19
 
 ### Dictation on the phone, in your languages

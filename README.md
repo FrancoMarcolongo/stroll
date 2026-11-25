@@ -133,11 +133,12 @@ Stroll on a phone is a second view of the Stroll running on your computer. Nothi
 - **Turn it on** in **Settings › Phone access**, press **Pair a phone** and scan the code with the phone's camera. The code works once, for five minutes.
 - **The app** is for Android 7 or later, with Chrome. Get it from the page the code opens, or at `/stroll.apk` on the relay's address. The same page works in the phone's browser with nothing installed.
 - **What it does:** shows what needs you. Opens a session with its live terminal, a row of keys for prompts (Esc, arrows, Enter) and a message box. Reads a run's report and answers what the run asks for. Adds and ticks to-dos. Starts workflows and new sessions.
+- **Trails on the phone:** each trail shows its notes, its to-dos, live sessions, workflows and runs. What sessions suggest for the notes waits there too: touch it up, then **Add to notes** or **Dismiss**. A shorter draft of the notes can be taken or dismissed, and **New session** starts one on the trail, in its folder, with its notes.
 - **Notifications:** turn them on in the phone app. **Notify phones** in Settings says when they're sent: only when you're not at Stroll on the computer (the default), always, or never. A kind turned off under Notifications doesn't reach phones either. They go from your computer to the phone through the browser's push service, encrypted so that service can't read them.
 - **Dictation:** the microphone by the message box types what you say and keeps listening until you tap it again or send. It hears one language at a time: the phone's own to begin with, and **Change language** above the box adds the others you speak, one tap apart. The speech is recognised by the phone's browser (in Chrome, by Google's speech service), not by Stroll or your computer; only the text is sent, when you press Send.
 - **A session's terminal has one size.** Opening it on the phone gives it the phone's size; a click or a key in the computer's window takes it back.
 - **Staying awake:** while phone access is on and something is working, Stroll keeps the computer from going to sleep on its own. Closing the lid still stops everything.
-- **What a phone can't do:** change settings, set up workflows, pair or remove phones, update Stroll, or delete things.
+- **What a phone can't do:** change settings, set up workflows, edit a trail's notes (the computer's editor knows the files they reference), pair or remove phones, update Stroll, or delete things.
 - **Remove a phone** in **Settings › Phone access**. It's disconnected at once and can't come back without pairing again.
 
 ### How it stays private
