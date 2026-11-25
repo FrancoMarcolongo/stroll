@@ -3,8 +3,9 @@ const crypto = require('crypto');
 const { writePrivate } = require('./config');
 
 const HOOK_EVENTS = ['SessionStart', 'UserPromptSubmit', 'PreToolUse', 'PostToolUse', 'Notification', 'Stop', 'SessionEnd'];
-// PreToolUse only for tools that stop and wait on the user, so the dot can turn yellow.
-const MATCHERS = { PreToolUse: 'AskUserQuestion|ExitPlanMode', PostToolUse: '*' };
+// PreToolUse only for tools that stop and wait on the user, so the dot can turn yellow, and for
+// subagents, so Stroll knows how many are out while they work.
+const MATCHERS = { PreToolUse: 'AskUserQuestion|ExitPlanMode|Task|Agent', PostToolUse: '*' };
 // PostToolUse payloads carry the tool's whole output, which Stroll never reads; only the
 // head (tool name and input) is sent.
 const BODY_CAP = { PostToolUse: 16 * 1024 };

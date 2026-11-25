@@ -39,11 +39,11 @@ kbd { font: 500 10.5px/1 var(--font); color: var(--text-3); background: var(--bg
 
 /* ---------- the columns: menu | what's open | side panel (app.js, "layout") ---------- */
 /* The widths are set by app.js; the splitters sit over the borders and take no room. */
-#app { --menu-w: 296px; --side-w: 0px; position: relative; display: grid; grid-template-columns: var(--menu-w) minmax(0, 1fr) var(--side-w); height: 100vh; }
+#app { --menu-w: 296px; --side-w: 46px; position: relative; display: grid; grid-template-columns: var(--menu-w) minmax(0, 1fr) var(--side-w); height: 100vh; }
 #sidebar { grid-column: 1; }
 #main { grid-column: 2; }
 #dock { grid-column: 3; } /* each keeps its column when another is hidden */
-#sidebar, #main, #dock { grid-row: 1; }
+#sidebar, #main, #dock { grid-row: 1; } /* and its row when they're placed out of order */
 #app[data-menu="closed"] #sidebar, #app[data-side="off"] #dock { display: none; }
 .splitter { position: absolute; top: 0; bottom: 0; width: 7px; z-index: 30; cursor: col-resize; }
 .splitter::after { content: ''; position: absolute; top: 0; bottom: 0; left: 3px; width: 1px; transition: background 0.12s; }
@@ -60,18 +60,47 @@ body.resizing #terminals { pointer-events: none; }
 #app[data-menu="closed"] #menu-show { display: inline-grid; }
 #app[data-menu="closed"] #view-header { padding-left: 112px; }
 :root:not([data-platform="darwin"]) #app[data-menu="closed"] #view-header { padding-left: 42px; }
-#side-show { position: absolute; top: 11px; right: 10px; z-index: 6; display: none; -webkit-app-region: no-drag; }
-#side-show svg { transform: scaleX(-1); }
-#app[data-side="off"] #side-show { display: inline-grid; }
-#app[data-side="off"] #view-header { padding-right: 42px; }
+/* The journey in the middle (app.js, "stage"): it takes the second column and what's open goes
+   to the third, put away altogether until something is opened. */
+#app[data-stage="map"] #dock { grid-column: 2; border-left: 0; }
+#app[data-stage="map"] #main { grid-column: 3; border-left: 1px solid var(--line-soft); }
+#app[data-stage="map"][data-console="hidden"] #main { display: none; }
+#app[data-stage="map"][data-console="shown"] #split-side { display: block; }
+#app[data-stage="map"] .dock-tabs, #app[data-stage="map"] #dock-narrow, #app[data-stage="map"] #menu-show { display: none; }
+#app[data-stage="map"] #view-header, #app[data-stage="map"][data-menu="closed"] #view-header { padding-left: 46px; }
+#console-hide { position: absolute; top: 11px; left: 10px; z-index: 6; display: none; -webkit-app-region: no-drag; }
+#app[data-stage="map"] #console-hide { display: inline-grid; }
+#menu-show-map { display: none; order: -1; -webkit-app-region: no-drag; }
+#app[data-stage="map"][data-menu="closed"] #menu-show-map { display: inline-grid; }
+#app[data-stage="map"][data-menu="closed"] #dock-head { padding-left: 80px; }
+:root:not([data-platform="darwin"]) #app[data-stage="map"][data-menu="closed"] #dock-head { padding-left: 10px; }
+#app[data-stage="map"] #dock-head::before { content: 'Journey'; flex: 1; font-size: 12.5px; font-weight: 600; color: var(--text-2); padding-left: 4px; }
+#stage-btn { -webkit-app-region: no-drag; }
 
-/* ---------- the side panel: the trail of what's open ---------- */
+/* ---------- the side panel: tabs of views, or a strip of who's at work ---------- */
 #dock { background: var(--bg-side); border-left: 1px solid var(--line-soft); display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; }
 #dock-head { min-height: 46px; display: flex; align-items: center; gap: 6px; padding: 0 8px 0 10px; border-bottom: 1px solid var(--line-soft); flex: none; }
-.dock-title { flex: 1; min-width: 0; display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; font-weight: 600; color: var(--text-2); padding-left: 4px; }
-.dock-title .count { background: var(--accent-soft); color: var(--accent); }
-#dock-hide { -webkit-app-region: no-drag; }
+.dock-tabs { display: flex; gap: 2px; flex: 1; min-width: 0; }
+.dock-tabs button { display: inline-flex; align-items: center; gap: 6px; border: 0; background: transparent; color: var(--text-3); font-size: 12.5px; font-weight: 550; padding: 5px 10px; border-radius: 7px; -webkit-app-region: no-drag; }
+.dock-tabs button:hover { color: var(--text); background: var(--bg-hover); }
+.dock-tabs button.active { color: var(--text); background: var(--bg-active); }
+.dock-tabs .count { background: var(--accent-soft); color: var(--accent); }
 .dock-view { flex: 1; min-height: 0; position: relative; overflow-y: auto; overflow-x: hidden; }
+.dock-view[hidden] { display: none; }
+#dock-strip { display: none; flex: 1; flex-direction: column; align-items: center; min-height: 0; }
+#dock-strip > .icon-btn { margin: 11px 0 6px; flex: none; }
+#dock-strip-people { flex: 1; width: 100%; min-height: 0; position: relative; overflow-y: auto; overflow-x: hidden; }
+#app[data-side="strip"] #dock-head, #app[data-side="strip"] .dock-view { display: none; }
+#app[data-side="strip"] #dock-strip { display: flex; }
+#app[data-side="strip"] #dock-widen svg { transform: scaleX(-1); }
+.journey-canvas { display: block; }
+.journey-tip { position: absolute; z-index: 5; max-width: 240px; display: grid; gap: 3px; padding: 8px 10px; background: var(--bg-raised); border: 1px solid var(--line); border-radius: 9px; box-shadow: var(--shadow); font-size: 12px; color: var(--text-2); pointer-events: none; overflow-wrap: anywhere; }
+.journey-tip b { color: var(--text); font-weight: 600; }
+.journey-tip-status { font-size: 11.5px; color: var(--text-3); }
+.journey-tip-status.working { color: #6fdd7f; }
+.journey-tip-status.waiting { color: #f2bf4a; }
+.journey-tip-status.idle { color: #8cc2ff; }
+.journey-tip-status.bg { color: #c6a8ff; }
 #dock-trail { padding: 14px 14px 30px; }
 .dock-trail { display: grid; gap: 14px; }
 .dock-trail-head { display: flex; align-items: center; gap: 8px; min-width: 0; }

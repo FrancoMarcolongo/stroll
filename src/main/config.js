@@ -55,9 +55,10 @@ const DEFAULT_CONFIG = {
   remote: { enabled: false, relayUrl: 'wss://stroll-relay.francomarcolongo98.workers.dev', appUrl: '', notify: 'away' },
   // Sidebar sections, top to bottom, and which ones are collapsed.
   sidebar: { order: ['todos', 'trails', 'sessions', 'runs', 'workflows', 'recent'], collapsed: ['recent'], expanded: [] },
-  // The window's columns: the menu on the left, what's open in the middle, the side panel (the
-  // trail of what's open) on the right. menu: 'open' | 'closed'; side: 'open' | 'off'. Widths in px.
-  layout: { menu: 'open', side: 'off', menuWidth: 296, sideWidth: 360 },
+  // The window's columns: the menu on the left, what's open in the middle, the side panel on the
+  // right. menu: 'open' | 'closed'. side: 'open' | 'strip' (a narrow column of who's at work) |
+  // 'off'. Widths in px; sideTab: which of the side panel's views shows ('journey' | 'trail').
+  layout: { menu: 'open', side: 'strip', menuWidth: 296, sideWidth: 380, sideTab: 'journey', stage: 'console', consoleWidth: null },
 };
 
 // Background runs are unattended. They load no settings at all (`--setting-sources ""`), so

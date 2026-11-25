@@ -2,6 +2,19 @@
 
 Stroll shows the new sections here once, after an update. **Settings › Updates › What's new** shows them all again.
 
+## 0.17.0 — 2026-11-25
+
+### The journey
+- **A map of your live sessions, in the side panel.** Each session is a walker, and where it stands says what it's doing: thinking on the paths, reading at the map board, editing on the rock, running commands at the campfire, needing you at the gate (with a yellow **!**), something running in the background at the pond, finished on the deck with a tick. Hover someone for what they're on; click to open their session.
+- **A clearing for every active trail,** with its camp, and the base camp for sessions on no trail. Click a camp's tent to start a session on that trail. A walker comes out of its tent when its session starts or is resumed, and goes back in when it ends.
+- **Subagents and background agents are pets** that follow their walker. **Background runs are wanderers** with a pack and a stick: they work at the same stations, wait at the gate for your OK, and when they're done leave a bag in their clearing. Click the bag to open the run.
+- Walkers who meet say hello and tell each other what their session is at ("Editing journey.js", "Need your OK for Bash"), and those at the same spot chat now and then.
+- A breeze crosses the woods, and the light follows your clock: golden in the late afternoon, and at night the campfire, the lanterns and the fireflies glow.
+
+### The journey in the middle
+- **Make the journey the main view** with the map button at the top of the side panel, or in **Settings › Layout**. A click on someone opens their session beside the map, as does anything you open from the menu; ⌘O puts it away to have the whole map again.
+- **The side panel starts narrow now:** a strip of heads with their dots, one per walker. ⌘O opens it, and **Settings › Layout** hides it altogether. Its **Trail** tab still shows the trail of what's open, with its notes and suggestions.
+
 ## 0.16.1 — 2026-11-25
 
 ### The phone keeps the same order

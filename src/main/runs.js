@@ -28,6 +28,19 @@ function summarizeInput(input) {
   return s.replace(/\s+/g, ' ').slice(0, 200);
 }
 
+// What kind of thing a session or a run is doing, from the tool it last used: the journey acts it
+// out (reading, typing, at the terminal, with a helper). Anything else, or between tools, is thinking.
+const ACTIVITY = {
+  read: ['Read', 'Grep', 'Glob', 'LS', 'NotebookRead', 'WebFetch', 'WebSearch', 'ListMcpResourcesTool', 'ReadMcpResourceTool'],
+  write: ['Edit', 'Write', 'MultiEdit', 'NotebookEdit'],
+  run: ['Bash', 'BashOutput', 'KillShell', 'KillBash', 'Monitor'],
+  agent: ['Task', 'Agent'],
+};
+function activityOf(tool) {
+  for (const [kind, tools] of Object.entries(ACTIVITY)) if (tools.includes(tool)) return kind;
+  return 'think';
+}
+
 // One stream-json message → the condensed events the run view shows, plus the run fields it
 // updates. Pure, so a run can be rebuilt from its .jsonl file.
 function condense(msg) {
@@ -37,11 +50,11 @@ function condense(msg) {
     for (const block of msg.message.content) {
       if (block.type === 'text' && block.text?.trim()) {
         events.push({ kind: 'text', text: block.text });
-        patch = { lastActivity: block.text.replace(/\s+/g, ' ').slice(0, 120) };
+        patch = { lastActivity: block.text.replace(/\s+/g, ' ').slice(0, 120), activity: 'think' };
       } else if (block.type === 'tool_use') {
         const detail = summarizeInput(block.input);
         events.push({ kind: 'tool', name: block.name, detail });
-        patch = { lastActivity: `${block.name} ${detail}`.slice(0, 120) };
+        patch = { lastActivity: `${block.name} ${detail}`.slice(0, 120), activity: activityOf(block.name) };
       }
     }
   } else if (msg.type === 'user' && Array.isArray(msg.message?.content)) {
@@ -230,4 +243,4 @@ class Runs extends EventEmitter {
   killAll() { for (const p of this.procs.values()) { try { p.kill('SIGTERM'); } catch (_) { /* ignore */ } } }
 }
 
-module.exports = { Runs, summarizeInput, condense };
+module.exports = { Runs, summarizeInput, condense, activityOf };

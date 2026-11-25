@@ -116,6 +116,7 @@ const ICON = {
   x: svgIcon('<path d="M18 6L6 18M6 6l12 12"/>'),
   panelLeft: svgIcon('<rect x="3" y="4" width="18" height="16" rx="2.5"/><path d="M9 4v16"/><path d="M15.5 10l-2 2 2 2"/>'),
   panelRight: svgIcon('<rect x="3" y="4" width="18" height="16" rx="2.5"/><path d="M15 4v16"/><path d="M8.5 10l2 2-2 2"/>'),
+  map: svgIcon('<path d="M9 4L3 6.5V20l6-2.5 6 2.5 6-2.5V4l-6 2.5z"/><path d="M9 4v13.5M15 6.5V20"/>'),
   monitor: svgIcon('<rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/>'),
   moon: svgIcon('<path d="M20 14.5A8 8 0 019.5 4a8 8 0 1010.5 10.5z"/>'),
 };
@@ -733,13 +734,15 @@ api.on('session:data', (id, seq, data) => {
 api.on('session:exit', id => { if (S.view.type === 'session' && S.view.id === id) renderMain(); });
 
 // ---------- main views ----------
-function navigate(view) {
+// With the journey in the middle, opening anything shows it beside the map; `reveal: false` is
+// for falling back to Home when what was open has gone, which leaves the map as it was.
+function navigate(view, { reveal = true } = {}) {
   MdEditor.close();
   S.view = view;
   api.send('ui:focus', view);
   renderSidebar();
   renderMain();
-  renderDock();
+  if (reveal && layout().stage === 'map' && !consoleShown) { consoleShown = true; applyLayout(); } else renderDock();
 }
 
 // A view can be opened for something created a moment ago (a new session, a hand-off) before
@@ -757,7 +760,7 @@ function renderMain() {
   const v = S.view;
   const find = { session, run, todo, workflow, trail }[v.type];
   if (find && !find(v.id)) {
-    ensureKnown(v).then(ok => { if (S.view === v) { if (ok) renderMain(); else navigate({ type: 'home' }); } });
+    ensureKnown(v).then(ok => { if (S.view === v) { if (ok) renderMain(); else navigate({ type: 'home' }, { reveal: false }); } });
     return;
   }
   const header = $('#view-header');
@@ -1780,12 +1783,12 @@ document.addEventListener('click', async e => {
         const closedIds = S.data.sessions.filter(s => !s.live).map(s => s.id);
         await api.invoke('sessions:clearClosed');
         for (const cid of closedIds) { terms.get(cid)?.term.dispose(); terms.get(cid)?.el.remove(); terms.delete(cid); }
-        if (S.view.type === 'session' && closedIds.includes(S.view.id)) navigate({ type: 'home' });
+        if (S.view.type === 'session' && closedIds.includes(S.view.id)) navigate({ type: 'home' }, { reveal: false });
         return flash(`Cleared ${closedIds.length} closed session${closedIds.length === 1 ? '' : 's'}`);
       }
       case 'clear-runs': {
         const n = await api.invoke('runs:clearFinished');
-        if (S.view.type === 'run' && !run(S.view.id)) navigate({ type: 'home' });
+        if (S.view.type === 'run' && !run(S.view.id)) navigate({ type: 'home' }, { reveal: false });
         return flash(`Cleared ${n} finished run${n === 1 ? '' : 's'}`);
       }
       case 'ap-allow': case 'ap-always': case 'ap-deny': {
@@ -2551,10 +2554,13 @@ function renderSettings(header, panel) {
       ${IS_MAC ? toggle('set-option-meta', c.terminal.optionIsMeta, 'Use Option as Meta', 'Enables Option+Enter and Option+arrows in Claude Code. Leave it off if you type characters such as @ or # with Option.') : ''}
     </section>
     <section class="set-group"><h3>Layout</h3>
+      <div class="field"><label>In the middle</label>
+        <select id="set-stage">${[['console', 'Claude Code, with the journey on the side'], ['map', 'The journey: a click on someone opens them beside it']]
+    .map(([v, l]) => `<option value="${v}" ${layout().stage === v ? 'selected' : ''}>${l}</option>`).join('')}</select></div>
       <div class="field"><label>Side panel</label>
-        <select id="set-side">${[['open', 'Open: the trail of what’s open, its notes and suggestions'], ['off', 'Hidden']]
+        <select id="set-side">${[['open', 'Open: the journey, and the trail of what’s open'], ['strip', 'Narrow: a strip of who’s at work'], ['off', 'Hidden']]
     .map(([v, l]) => `<option value="${v}" ${layout().side === v ? 'selected' : ''}>${l}</option>`).join('')}</select>
-        <p class="help">${APP_KEY}O shows and hides it, and ${APP_KEY}\\ hides the menu. Drag a column’s border to make it wider or narrower; double-click the border to put it back.</p></div>
+        <p class="help">With Claude Code in the middle, ${APP_KEY}O opens and narrows the side panel; with the journey in the middle, it shows and puts away what’s open beside it. ${APP_KEY}\\ hides the menu. Drag a column’s border to make it wider or narrower; double-click the border to put it back.</p></div>
     </section>
     <section class="set-group"><h3>Notifications</h3>
       ${toggle('set-n-enabled', c.notifications.enabled, 'Show notifications')}
@@ -2600,6 +2606,7 @@ function renderSettings(header, panel) {
   bind('#set-font-family', 'change', e => save({ terminal: { fontFamily: e.target.value.trim() || 'Menlo, monospace' } }));
   if (IS_MAC) bind('#set-option-meta', 'change', e => save({ terminal: { optionIsMeta: e.target.checked } }));
   bind('#set-side', 'change', e => saveLayout({ side: e.target.value }));
+  bind('#set-stage', 'change', e => setStage(e.target.value));
   bind('#set-n-enabled', 'change', e => save({ notifications: { enabled: e.target.checked } }));
   bind('#set-n-sound', 'change', e => save({ notifications: { sound: e.target.checked } }));
   bind('#set-n-needs', 'change', e => save({ notifications: { needsYou: e.target.checked } }));
@@ -2742,22 +2749,35 @@ $('#settings-btn').addEventListener('click', () => navigate({ type: 'settings' }
 
 // ---------- layout: the menu, what's open in the middle, the side panel ----------
 // Three columns. The menu and the side panel are dragged wider or narrower from their borders
-// (a double-click puts a border back), and either can be put away. The middle keeps room for
-// Claude Code, whose diffs and tables wrap below about 90 columns: in a window too narrow for
-// all three, the side panel waits, hidden, until it's wider again.
-const LAYOUT = { menu: 'open', side: 'off', menuWidth: 296, sideWidth: 360 };
+// (a double-click puts a border back) and can be put away: the menu altogether, the side panel
+// down to a strip of who's at work. The middle keeps room for Claude Code, whose diffs and
+// tables wrap below about 90 columns: a window too narrow for all three shows the strip instead
+// of the open panel until it's wider again.
+// Or the other way round (`stage: 'map'`): the journey in the middle, and what's opened (by a
+// click on someone, or from the menu) on the right, until it's put away again.
+const LAYOUT = { menu: 'open', side: 'strip', menuWidth: 296, sideWidth: 380, sideTab: 'journey', stage: 'console', consoleWidth: null };
 const MENU_W = [220, 440];
 const SIDE_W = [280, 720];
+const STRIP_W = 46;
+const MAP_MIN = 300; // the journey's least width beside what's open
+const CONSOLE_W = [420, 1600];
 const clampW = (w, [lo, hi]) => Math.min(hi, Math.max(lo, Number(w) || lo));
 const layout = () => ({ ...LAYOUT, ...(S.data?.config?.layout || {}) });
 const centerMin = () => Math.round(90 * (Number(S.data?.config?.terminal?.fontSize) || 13) * 0.6) + 24;
-const sideFits = menu => innerWidth - menu - clampW(layout().sideWidth, SIDE_W) >= centerMin();
+let sideSqueezed = false; // the side panel is meant to be open, but the window is too narrow now
+let consoleShown = false; // with the journey in the middle: what's open is showing beside it
 
 function columns() {
   const L = layout();
   const menu = L.menu === 'closed' ? 0 : clampW(L.menuWidth, MENU_W);
-  const side = L.side === 'open' && sideFits(menu) ? 'open' : 'off';
-  return { menu, side, sideW: side === 'open' ? clampW(L.sideWidth, SIDE_W) : 0 };
+  if (L.stage === 'map') {
+    const want = clampW(L.consoleWidth || centerMin() + 40, CONSOLE_W);
+    return { stage: 'map', menu, side: 'map', sideW: consoleShown ? Math.max(0, Math.min(want, innerWidth - menu - MAP_MIN)) : 0 };
+  }
+  const open = clampW(L.sideWidth, SIDE_W);
+  sideSqueezed = L.side === 'open' && innerWidth - menu - open < centerMin();
+  const side = sideSqueezed ? 'strip' : ['open', 'strip', 'off'].includes(L.side) ? L.side : 'strip';
+  return { stage: 'console', menu, side, sideW: side === 'open' ? open : side === 'strip' ? STRIP_W : 0 };
 }
 
 function applyLayout() {
@@ -2768,6 +2788,13 @@ function applyLayout() {
   app.style.setProperty('--side-w', `${c.sideW}px`);
   app.dataset.menu = c.menu ? 'open' : 'closed';
   app.dataset.side = c.side;
+  app.dataset.stage = c.stage;
+  app.dataset.console = c.stage === 'map' && !consoleShown ? 'hidden' : 'shown';
+  // Keys typed with what's open put away mustn't land in a terminal nobody sees.
+  if (app.dataset.console === 'hidden' && $('#main').contains(document.activeElement)) document.activeElement.blur();
+  const stage = $('#stage-btn');
+  stage.innerHTML = c.stage === 'map' ? ICON.terminal : ICON.map;
+  stage.title = c.stage === 'map' ? 'Put Claude Code back in the middle' : 'Make the journey the main view: what you open shows beside it';
   renderDock();
 }
 
@@ -2778,26 +2805,38 @@ function saveLayout(patch) {
 }
 
 function toggleMenu() { saveLayout({ menu: layout().menu === 'closed' ? 'open' : 'closed' }); }
+function showConsole(on) {
+  consoleShown = on;
+  applyLayout();
+  if (on && S.view.type === 'session') requestAnimationFrame(() => terms.get(S.view.id)?.term.focus());
+}
+function setStage(stage) {
+  // Switching to the map shows it whole; switching back puts what was open in the middle again.
+  consoleShown = false;
+  saveLayout({ stage });
+  if (stage === 'console' && S.view.type === 'session') requestAnimationFrame(() => terms.get(S.view.id)?.term.focus());
+}
 function toggleSide() {
-  if (columns().side === 'open') { saveLayout({ side: 'off' }); return; }
-  // Kept open for when the window is wider, and said why it isn't showing yet.
-  if (!sideFits(columns().menu)) flash(`The window is too narrow for the side panel next to Claude Code. Make it wider, or hide the menu (${APP_KEY}\\).`, null, { ms: 5000 });
-  saveLayout({ side: 'open' });
+  if (layout().stage === 'map') { showConsole(!consoleShown); return; }
+  if (sideSqueezed) {
+    flash(`The window is too narrow for the journey next to Claude Code. Make it wider, or hide the menu (${APP_KEY}\\).`, null, { ms: 5000 });
+    return;
+  }
+  saveLayout({ side: layout().side === 'open' ? 'strip' : 'open' });
 }
 
 // A border dragged: the column follows the pointer within its limits, leaving the middle its
-// room, and the width is kept when the pointer lets go.
-function splitter(el, key, range, sign) {
-  const prop = key === 'menuWidth' ? '--menu-w' : '--side-w';
+// room, and the width is kept when the pointer lets go. `which` says, for the columns as they
+// are, which width that is: { key, prop, range, w0, room }.
+function splitter(el, which, sign) {
   el.addEventListener('pointerdown', e => {
     if (e.button !== 0) return;
     e.preventDefault();
     try { el.setPointerCapture(e.pointerId); } catch (_) { /* a pointer that's already gone */ }
     el.classList.add('dragging');
     document.body.classList.add('resizing');
-    const c = columns();
-    const w0 = key === 'menuWidth' ? c.menu : c.sideW;
-    const max = Math.max(range[0], Math.min(range[1], innerWidth - (key === 'menuWidth' ? c.sideW : c.menu) - centerMin()));
+    const { key, prop, range, w0, room } = which(columns());
+    const max = Math.max(range[0], Math.min(range[1], room));
     let w = w0;
     const move = ev => {
       w = Math.round(Math.min(max, Math.max(range[0], w0 + sign * (ev.clientX - e.clientX))));
@@ -2815,23 +2854,122 @@ function splitter(el, key, range, sign) {
     el.addEventListener('pointerup', up);
     el.addEventListener('pointercancel', up);
   });
-  el.addEventListener('dblclick', () => saveLayout({ [key]: LAYOUT[key] }));
+  el.addEventListener('dblclick', () => { const { key } = which(columns()); saveLayout({ [key]: LAYOUT[key] }); });
 }
-splitter($('#split-menu'), 'menuWidth', MENU_W, 1);
-splitter($('#split-side'), 'sideWidth', SIDE_W, -1);
+const middleMin = c => (c.stage === 'map' ? MAP_MIN : centerMin());
+splitter($('#split-menu'), c => ({ key: 'menuWidth', prop: '--menu-w', range: MENU_W, w0: c.menu, room: innerWidth - c.sideW - middleMin(c) }), 1);
+splitter($('#split-side'), c => (c.stage === 'map'
+  ? { key: 'consoleWidth', prop: '--side-w', range: CONSOLE_W, w0: c.sideW, room: innerWidth - c.menu - MAP_MIN }
+  : { key: 'sideWidth', prop: '--side-w', range: SIDE_W, w0: c.sideW, room: innerWidth - c.menu - centerMin() }), -1);
 let layoutFrame = 0;
 addEventListener('resize', () => { cancelAnimationFrame(layoutFrame); layoutFrame = requestAnimationFrame(applyLayout); });
 $('#menu-hide').addEventListener('click', toggleMenu);
 $('#menu-show').addEventListener('click', toggleMenu);
-$('#side-show').addEventListener('click', toggleSide);
-$('#dock-hide').addEventListener('click', toggleSide);
+$('#menu-show-map').addEventListener('click', toggleMenu);
+$('#console-hide').addEventListener('click', () => showConsole(false));
+$('#stage-btn').addEventListener('click', () => setStage(layout().stage === 'map' ? 'console' : 'map'));
+$('#dock-narrow').addEventListener('click', () => saveLayout({ side: 'strip' }));
+$('#dock-widen').addEventListener('click', toggleSide);
+$('#dock-head .dock-tabs').addEventListener('click', e => {
+  const tab = e.target.closest('[data-dock-tab]');
+  if (tab) saveLayout({ sideTab: tab.dataset.dockTab });
+});
 
-// ---------- the side panel: the trail of what's open ----------
+// ---------- the side panel: the journey, and the trail of what's open ----------
+const ACTIVITY_LABEL = { read: 'Reading', write: 'Editing files', run: 'Running commands', agent: 'Working with an agent', think: 'Thinking' };
+let journeyView = null; // the map, when the panel is open
+let stripView = null; // the heads, when it's a strip
+
+// What a walker tells another when they stop to chat: a few words on what their session is at,
+// from the step it's on (a tool and what it's used on, or the prompt it was given).
+const sayShort = (text, n = 30) => { const t = String(text || '').replace(/\s+/g, ' ').trim(); return t.length > n ? `${t.slice(0, n - 1).trimEnd()}…` : t; };
+const sayFile = path => String(path || '').replace(/["']/g, '').split(/[\\/]/).filter(Boolean).pop() || 'a file';
+const SAY_STEP = [
+  [/^(?:Edit|Write|MultiEdit|NotebookEdit)\b\s*(.*)/, m => `Editing ${sayFile(m[1])}`],
+  [/^(?:Read|NotebookRead)\b\s*(.*)/, m => `Reading ${sayFile(m[1])}`],
+  [/^(?:Grep|Glob|LS)\b\s*(.*)/, m => (m[1] ? `Looking for ${m[1]}` : 'Looking around the code')],
+  [/^(?:Bash|BashOutput|Monitor)\b\s*(.*)/, m => (m[1] ? `Running ${m[1].split(' ').slice(0, 3).join(' ')}` : 'Running a command')],
+  [/^(?:WebFetch|WebSearch)\b/, () => 'Reading up online'],
+  [/^(?:Task|Agent)\b:?\s*(.*)/, m => (m[1] ? `Sent a helper to ${m[1]}` : 'Sent a helper out')],
+];
+function journeySay({ dot, step, title, run }) {
+  if (run === 'done') return 'Left you a bag';
+  if (run === 'failed') return 'Hit a snag, left you a note';
+  if (dot === 'waiting') { const m = /permission to use (\S+)/.exec(step || ''); return m ? `Need your OK for ${m[1]}` : 'Waiting on you'; }
+  if (dot === 'idle') return step ? sayShort(`Done: ${String(step).replace(/^\s*done\b[:.,!]?\s*/i, '')}`) : 'Done, your turn';
+  if (dot === 'bg') return 'Waiting on a background job';
+  if (dot === 'working') {
+    const s = String(step || '').trim();
+    if (s.startsWith('›')) return sayShort(`On it: ${s.slice(1)}`);
+    for (const [re, f] of SAY_STEP) { const m = re.exec(s); if (m) return sayShort(f(m)); }
+    return title ? sayShort(`Thinking about ${title}`) : 'Thinking it over';
+  }
+  return 'Taking a break';
+}
+
+// Who's out: the live sessions, oldest first, each with the trail it walks (none: base camp);
+// then the background runs, as wanderers: those still running, and those finished that you
+// haven't looked at yet (a bag they left).
+function journeyPeople() {
+  const here = S.view.type === 'session' ? S.view.id : null;
+  return [...journeySessions(here), ...journeyRuns()];
+}
+function journeyRuns() {
+  const open = S.view.type === 'run' ? S.view.id : null;
+  return S.data.runs.filter(r => r.status === 'running' || (r.unseen && r.status !== 'reviewed'))
+    .sort((a, b) => (a.startedAt || '').localeCompare(b.startedAt || ''))
+    .map(r => {
+      const tr = trail(r.trailId);
+      const running = r.status === 'running';
+      const status = r.pendingApproval ? 'Background run · needs your OK'
+        : running ? `Background run · ${ACTIVITY_LABEL[r.activity] || 'Working'}`
+          : r.status === 'ready' ? 'Finished: left a bag with what they found' : `${RUN_LABEL[r.status] || 'Stopped'}: left a bag with a note`;
+      return {
+        id: r.id, kind: 'run', title: r.title, dot: runDot(r), activity: r.activity || null, run: running ? 'running' : r.status === 'ready' ? 'done' : 'failed',
+        current: r.id === open, status, preview: r.pendingApproval ? r.pendingApproval.detail || '' : running ? r.lastActivity || '' : plainText(r.result || r.error || '').slice(0, 160),
+        say: journeySay({ dot: runDot(r), step: r.pendingApproval ? `permission to use ${(r.pendingApproval.detail || '').split(' ')[0]}` : r.lastActivity, title: r.title, run: running ? 'running' : r.status === 'ready' ? 'done' : 'failed' }),
+        trailId: tr ? tr.id : null, trailTitle: tr?.title || '', trailOrder: tr?.order ?? 0,
+      };
+    });
+}
+function journeySessions(here) {
+  return S.data.sessions.filter(s => s.live)
+    .sort((a, b) => (a.createdAt || '').localeCompare(b.createdAt || ''))
+    .map(s => {
+      const dot = sessionDot(s);
+      const out = dot === 'working' ? s.subagents || 0 : 0;
+      const status = out ? `Out with ${out} subagent${out === 1 ? '' : 's'}` : dot === 'working' ? ACTIVITY_LABEL[s.activity] || 'Working'
+        : dot !== 'none' ? TRAIL_PILL[dot] : s.status === 'starting' ? 'Starting' : 'Nothing to do';
+      const tr = trail(s.trailId);
+      return {
+        id: s.id, title: s.title, dot, activity: s.activity || null, subagents: s.subagents || 0,
+        bgAgents: (s.background || []).filter(t => t.kind === 'agent').length, finishedAt: s.finishedAt || null, starting: s.status === 'starting', current: s.id === here, preview: s.preview || '', status,
+        say: journeySay({ dot, step: s.preview, title: s.title }),
+        trailId: tr ? tr.id : null, trailTitle: tr?.title || '', trailOrder: tr?.order ?? 0,
+      };
+    });
+}
+
 function renderDock() {
-  if (!S.data) return;
+  if (!S.data || !window.Journey) return;
+  const side = $('#app').dataset.side;
+  const map = side === 'map'; // the journey is in the middle
+  const tab = !map && layout().sideTab === 'trail' ? 'trail' : 'journey';
+  for (const b of document.querySelectorAll('[data-dock-tab]')) b.classList.toggle('active', b.dataset.dockTab === tab);
+  $('#dock-journey').hidden = tab !== 'journey';
+  $('#dock-trail').hidden = tab !== 'trail';
+  const open = (id, kind) => navigate({ type: kind === 'run' ? 'run' : 'session', id });
+  // A click on a camp's tent: a new session on its trail (the base camp's: on none).
+  if (!journeyView) journeyView = Journey.create($('#dock-journey'), { onOpen: open, onCamp: trailId => startModal([], { trailId }) });
+  if (!stripView) stripView = Journey.create($('#dock-strip-people'), { mode: 'strip', onOpen: open });
+  const people = journeyPeople();
+  journeyView.update(people, activeTrails().map(t => ({ key: t.id, title: t.title, order: t.order ?? 0 })));
+  stripView.update(people);
+  journeyView.visible(map || (side === 'open' && tab === 'journey'));
+  stripView.visible(side === 'strip');
   const tr = dockTrail();
   $('#dock-trail-count').textContent = tr?.suggestions?.length ? String(tr.suggestions.length) : '';
-  if ($('#app').dataset.side === 'open') renderDockTrail();
+  if (side === 'open' && tab === 'trail') renderDockTrail();
 }
 
 // The trail of what's open in the middle: a session's, a run's, a to-do's or a workflow's.
@@ -2888,7 +3026,7 @@ function renderDockTrail() {
   renderSidebar();
   if (sectionOpen('recent')) refreshRecent();
   renderBanner();
-  navigate(pendingView || { type: 'home' });
+  navigate(pendingView || { type: 'home' }, { reveal: !!pendingView });
   // Once per version: what changed since the version this user last saw.
   const news = await api.invoke('app:whatsNew', false).catch(() => null);
   if (news && !$('#modal-root').children.length) whatsNewModal(news);

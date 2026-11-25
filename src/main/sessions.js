@@ -5,7 +5,7 @@ const path = require('path');
 const pty = require('node-pty');
 const { EventEmitter } = require('events');
 const { childEnv } = require('./config');
-const { summarizeInput } = require('./runs');
+const { summarizeInput, activityOf } = require('./runs');
 const { transcriptFor } = require('./recent');
 const { BackgroundTracker, endedIds } = require('./background');
 const { words } = require('./store');
@@ -20,6 +20,9 @@ const TRUST_WINDOW_MS = 30000;
 const TRUST_QUIET_MS = 700;
 
 const oneLine = s => (s ? String(s).replace(/\s+/g, ' ').trim().slice(0, 200) : '');
+
+// Tools that send a subagent out; the session counts them from start to finish.
+const SUBAGENT_TOOLS = ['Task', 'Agent'];
 const stripAnsi = s => String(s).replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/g, '').replace(/\x1b\][^\x07\x1b]*(\x07|\x1b\\)/g, '').replace(/\x1b[()][0-9A-Za-z]/g, '');
 
 // The TUI draws spaces as cursor moves, so text is compared with whitespace removed. "No, exit"
@@ -369,7 +372,7 @@ class Sessions extends EventEmitter {
     switch (event) {
       case 'SessionStart': {
         const transcriptPath = payload.transcript_path || s.transcriptPath;
-        const patch = { transcriptPath, lastActivityAt: at };
+        const patch = { transcriptPath, lastActivityAt: at, subagents: 0 };
         if (payload.session_id) patch.claudeSessionId = payload.session_id;
         if (e && e.bg.follow(transcriptPath)) patch.background = [];
         // A compaction happens mid-turn: Claude is still working.
@@ -397,13 +400,18 @@ class Sessions extends EventEmitter {
           break;
         }
         const prompt = oneLine(raw);
-        const patch = { status: 'working', unseen: false, lastActivityAt: at, lastTurnAt: at, preview: prompt ? `› ${prompt}` : s.preview };
+        const patch = { status: 'working', unseen: false, lastActivityAt: at, lastTurnAt: at, preview: prompt ? `› ${prompt}` : s.preview, activity: 'think', subagents: 0 };
         if (!s.title && prompt) patch.title = prompt.slice(0, 80);
         this.store.patchSession(id, patch);
         break;
       }
       case 'PreToolUse': {
-        // Only registered for tools that stop and wait on the user (see server.js).
+        // Registered for subagents and for tools that stop and wait on the user (see server.js).
+        if (SUBAGENT_TOOLS.includes(payload.tool_name)) {
+          const step = `${payload.tool_name} ${summarizeInput(payload.tool_input)}`.trim();
+          this.store.patchSession(id, { status: 'working', preview: step.slice(0, 160), lastActivityAt: at, activity: 'agent', subagents: (s.subagents || 0) + 1 });
+          break;
+        }
         const question = payload.tool_name === 'ExitPlanMode'
           ? 'Plan ready for your approval'
           : oneLine(payload.tool_input?.questions?.[0]?.question) || 'Claude has a question for you';
@@ -413,7 +421,9 @@ class Sessions extends EventEmitter {
       }
       case 'PostToolUse': {
         const step = `${payload.tool_name || 'Tool'} ${summarizeInput(payload.tool_input)}`.trim();
-        this.store.patchSession(id, { status: 'working', preview: step.slice(0, 160), lastActivityAt: at });
+        const patch = { status: 'working', preview: step.slice(0, 160), lastActivityAt: at, activity: activityOf(payload.tool_name) };
+        if (SUBAGENT_TOOLS.includes(payload.tool_name)) patch.subagents = Math.max(0, (s.subagents || 0) - 1);
+        this.store.patchSession(id, patch);
         break;
       }
       case 'Notification': {
@@ -429,7 +439,8 @@ class Sessions extends EventEmitter {
         this.syncBackground(id);
         const text = payload.last_assistant_message || lastAssistantText(payload.transcript_path || s.transcriptPath);
         const preview = previewFromText(text);
-        this.store.patchSession(id, { status: 'idle', unseen: true, preview: preview || s.preview, lastActivityAt: at, lastTurnAt: at });
+        // A subagent that never reported back is over when the turn is.
+        this.store.patchSession(id, { status: 'idle', unseen: true, preview: preview || s.preview, lastActivityAt: at, lastTurnAt: at, finishedAt: at, subagents: 0 });
         this.emit('attention', id, preview || 'Finished — your turn', 'finishedTurns');
         break;
       }
