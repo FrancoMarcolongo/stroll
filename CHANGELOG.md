@@ -2,6 +2,13 @@
 
 Stroll shows the new sections here once, after an update. **Settings › Updates › What's new** shows them all again.
 
+## 0.16.1 — 2026-11-25
+
+### The phone keeps the same order
+- **On the phone, sessions are ordered by when you or Claude last did something in them,** as on the computer since 0.16.0: the home page's lists and a trail's live sessions. A trail's "Last session … ago" counts the same way, so a restart of the computer doesn't move them.
+
+Nothing to install on the phone: the app loads the new version the next time it's opened.
+
 ## 0.16.0 — 2026-11-25
 
 ### A fuller Overview

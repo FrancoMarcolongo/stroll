@@ -48,6 +48,10 @@
   const trail = id => (id ? (S.data?.trails || []).find(t => t.id === id) : undefined);
   const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
   const byOrder = (a, b) => (a.order ?? 0) - (b.order ?? 0);
+  // When you or Claude last did something in a session (a prompt, a finished turn, a question),
+  // as on the computer: resuming one doesn't count, so a restart doesn't reorder them.
+  const lastTurn = s => s.lastTurnAt || s.finishedAt || s.lastActivityAt;
+  const byLastTurn = (a, b) => (lastTurn(b) || '').localeCompare(lastTurn(a) || '');
   const activeTrails = () => (S.data?.trails || []).filter(t => t.status !== 'archived').sort(byOrder);
   const computer = () => link.ready?.name || link.computer?.name || 'your computer';
 
@@ -247,7 +251,7 @@
       ...trailWorkflows(tr).map(w => (w.due && !w.due.runId ? 'waiting' : 'none'))];
     return ['waiting', 'idle', 'working', 'bg'].find(d => dots.includes(d)) || 'none';
   }
-  const lastActivity = list => list.map(x => x.lastActivityAt || x.finishedAt || x.startedAt).filter(Boolean).sort().pop() || null;
+  const lastActivity = list => list.map(x => x.lastTurnAt || x.finishedAt || x.lastActivityAt || x.startedAt).filter(Boolean).sort().pop() || null;
   function trailSub(tr) {
     const sugs = (tr.suggestions || []).length;
     if (sugs) return `${plural(sugs, 'suggestion')} for the notes`;
@@ -282,7 +286,7 @@
       });
     }
     const d = S.data;
-    const live = d.sessions.filter(s => s.live);
+    const live = d.sessions.filter(s => s.live).sort(byLastTurn);
     const needs = [
       ...live.filter(s => sessionDot(s) === 'waiting').map(sessionRow),
       ...d.runs.filter(r => ['idle', 'waiting'].includes(runDot(r))).map(runRow),
@@ -396,7 +400,7 @@
     const live = trailSessions(tr).filter(s => s.live);
     if (live.length) {
       const rank = s => ({ waiting: 0, idle: 1, working: 2, bg: 3 }[sessionDot(s)] ?? 4);
-      live.sort((a, b) => rank(a) - rank(b) || (b.lastActivityAt || '').localeCompare(a.lastActivityAt || ''));
+      live.sort((a, b) => rank(a) - rank(b) || byLastTurn(a, b));
       return { type: 'session', id: live[0].id };
     }
     const runs = trailRuns(tr);
@@ -481,7 +485,7 @@
     const open = trailTodos(tr).filter(t => t.status === 'open').sort(byOrder);
     setHtml($('#t-todos'), open.map(todoRow).join('') || '<li class="empty">No open to-dos on this trail.</li>');
     const all = trailSessions(tr);
-    const live = all.filter(s => s.live).sort((a, b) => (b.lastActivityAt || '').localeCompare(a.lastActivityAt || ''));
+    const live = all.filter(s => s.live).sort(byLastTurn);
     const closed = all.length - live.length;
     setHtml($('#t-sessions'), live.length || closed ? section('t-live', 'Live sessions', live.map(sessionRow).join('') || '<li class="empty">None right now.</li>',
       closed ? `${closed} closed, on the computer` : '') : '');
