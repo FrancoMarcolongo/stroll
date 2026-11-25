@@ -21,6 +21,8 @@ const { newVapidKeys, sendPush, validSubscription } = require('./push');
 const INVOKE = new Set([
   'state:get', 'todo:add', 'todo:update', 'todo:handoff',
   'session:create', 'session:buffer', 'session:kill', 'session:rename', 'session:link', 'session:markRead', 'session:mute', 'session:setTrail',
+  // Leaves the sessions open when Stroll quit closed: it only drops their "to resume" mark.
+  'session:clearRestorable',
   'run:markRead', 'run:decide', 'run:allowAll', 'run:events', 'run:cancel', 'run:reviewed',
   'workflow:start', 'workflow:prepare', 'workflow:dismiss', 'workflow:render',
   'trail:add', 'trail:update', 'trail:suggestion', 'trail:condense',

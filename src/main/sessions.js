@@ -10,9 +10,9 @@ const { transcriptFor } = require('./recent');
 const { BackgroundTracker, endedIds } = require('./background');
 const { words } = require('./store');
 const { refsNote } = require('./files');
+const { previewFromText, lastAssistantText, lastMessageAt } = require('./transcript');
 
 const BUFFER_LIMIT = 2 * 1024 * 1024; // chars of scrollback kept for replay when a view (re)attaches
-const TRANSCRIPT_TAIL = 512 * 1024;
 const QUICK_EXIT_MS = 6000;
 const SILENT_WORKING_MS = 12000; // Claude's TUI animates while it works; this long without output means it isn't
 const INTERRUPT_SETTLE_MS = 2500;
@@ -43,64 +43,6 @@ function watchTrustPrompt(entry, data) {
   } else if (no >= 0 && tr.text.includes('Accessingworkspace') && tr.text.indexOf('Yes,Itrustthisfolder', no) > no) {
     tr.timer = setTimeout(() => { tr.moved = true; tr.tries += 1; tr.text = ''; send('\x1b[B'); }, TRUST_QUIET_MS);
   }
-}
-
-// One line for the sidebar: the closing question if the reply ends with one, otherwise its
-// first non-heading line (replies tend to lead with the answer).
-function previewFromText(text) {
-  const lines = String(text || '').split('\n')
-    .map(raw => ({
-      heading: /^\s*#/.test(raw),
-      text: raw.replace(/^(\s*([>#*|-]|\d+[.)])\s*)+/, '').replace(/\*\*|__|`/g, '').replace(/\s+/g, ' ').trim(),
-    }))
-    .filter(l => l.text && !/^[-|:\s]+$/.test(l.text));
-  if (!lines.length) return null;
-  const last = lines[lines.length - 1].text;
-  if (/\?$/.test(last)) return last.slice(0, 160);
-  return (lines.find(l => !l.heading) || lines[0]).text.slice(0, 160);
-}
-
-// The last lines of a transcript, reading only its tail ([] when unreadable).
-function transcriptTail(file) {
-  if (!file || !fs.existsSync(file)) return [];
-  try {
-    const size = fs.statSync(file).size;
-    const fd = fs.openSync(file, 'r');
-    const len = Math.min(size, TRANSCRIPT_TAIL);
-    const buf = Buffer.alloc(len);
-    fs.readSync(fd, buf, 0, len, size - len);
-    fs.closeSync(fd);
-    return buf.toString('utf8').split('\n');
-  } catch (_) { return []; }
-}
-
-// Text of the last assistant message in a transcript.
-function lastAssistantText(file) {
-  const lines = transcriptTail(file);
-  for (let i = lines.length - 1; i >= 0; i -= 1) {
-    if (!lines[i].includes('"assistant"')) continue;
-    let d;
-    try { d = JSON.parse(lines[i]); } catch (_) { continue; }
-    if (d.type !== 'assistant' || d.isSidechain) continue;
-    const text = (d.message?.content || []).filter(c => c.type === 'text').map(c => c.text).join('\n').trim();
-    if (text) return text;
-  }
-  return null;
-}
-
-// When the last message (yours or Claude's) was written. The file's own time won't do: resuming
-// a session touches it.
-function lastMessageAt(file) {
-  const lines = transcriptTail(file);
-  for (let i = lines.length - 1; i >= 0; i -= 1) {
-    if (!lines[i].includes('"timestamp"')) continue;
-    let d;
-    try { d = JSON.parse(lines[i]); } catch (_) { continue; }
-    if ((d.type === 'user' || d.type === 'assistant') && !d.isSidechain && d.timestamp && !Number.isNaN(Date.parse(d.timestamp))) {
-      return new Date(d.timestamp).toISOString();
-    }
-  }
-  return null;
 }
 
 const THIN_NOTES_WORDS = 15;
@@ -178,6 +120,7 @@ class Sessions extends EventEmitter {
     const id = resumeId || crypto.randomUUID();
     if (this.live.has(id)) return id;
     const existing = this.store.session(id);
+    const wasRestorable = Boolean(existing?.restorable);
     const allTodoIds = Array.from(new Set([...(existing?.todoIds || []), ...todoIds]));
     const todos = allTodoIds.map(t => this.store.todo(t)).filter(Boolean);
     // A session keeps its trail; a new one (or one from before trails) takes its to-dos' trail,
@@ -273,6 +216,8 @@ class Sessions extends EventEmitter {
       if (!entry.gotHook && Date.now() - entry.startedAt < QUICK_EXIT_MS) {
         const tail = stripAnsi(entry.chunks.join('')).split('\n').map(l => l.trim()).filter(Boolean).slice(-3).join(' · ');
         detail = `Claude Code exited right away (code ${exitCode})${tail ? `: ${tail.slice(0, 300)}` : ''}`;
+        // One that was waiting to be resumed after a restart stays on that list.
+        if (wasRestorable) this.store.patchSession(id, { restorable: true });
         this.emit('failed', id, detail);
       } else if (exitCode) {
         detail = `exited with code ${exitCode}`;

@@ -52,6 +52,12 @@
   // as on the computer: resuming one doesn't count, so a restart doesn't reorder them.
   const lastTurn = s => s.lastTurnAt || s.finishedAt || s.lastActivityAt;
   const byLastTurn = (a, b) => (lastTurn(b) || '').localeCompare(lastTurn(a) || '');
+  // Whether version `v` (a.b.c) is `min` or later: what the computer's Stroll can be asked for.
+  const atLeast = (v, min) => {
+    const a = String(v || '0').split('.').map(Number); const b = min.split('.').map(Number);
+    for (let i = 0; i < 3; i += 1) if ((a[i] || 0) !== b[i]) return (a[i] || 0) > b[i];
+    return true;
+  };
   const activeTrails = () => (S.data?.trails || []).filter(t => t.status !== 'archived').sort(byOrder);
   const computer = () => link.ready?.name || link.computer?.name || 'your computer';
 
@@ -235,6 +241,8 @@
     r.pendingApproval ? `Needs your OK: ${r.pendingApproval.detail}` : r.status === 'running' ? (r.lastActivity || 'Running') : `${RUN_LABEL[r.status] || r.status} · ${agoText(r.finishedAt || r.startedAt)}`,
     '<span class="chev">›</span>');
   const sessionRow = s => row('session', s.id, dot(sessionDot(s)), s.title || 'Untitled session', s.preview || SESSION_LABEL[sessionDot(s)] || SESSION_LABEL[s.status] || '', '<span class="chev">›</span>');
+  const resumeRow = s => `<li><button class="row" data-act="resume" data-id="${esc(s.id)}">${dot('none')}
+      <span class="main"><span class="title">${esc(s.title || 'Untitled session')}</span><span class="sub">${esc([trail(s.trailId)?.title, s.preview].filter(Boolean).join(' · '))}</span></span><span class="go">Resume</span></button></li>`;
   const workflowRow = w => row('workflow', w.id, dot(w.due && !w.due.runId ? 'waiting' : 'none'), w.name, workflowStatus(w), '<span class="go">Start</span>');
   const todoRow = t => `<li><div class="row"><button class="check ${t.status === 'done' ? 'on' : ''}" data-act="todo-toggle" data-id="${esc(t.id)}" aria-label="${t.status === 'done' ? 'Reopen' : 'Mark done'}"></button>
       <span class="main"><span class="title">${esc(t.title)}</span>${t.notes ? `<span class="sub">${esc(t.notes.split('\n')[0])}</span>` : ''}</span></div></li>`;
@@ -268,7 +276,7 @@
 
   function renderHome(view) {
     if (!view.querySelector('#home')) {
-      setHtml(view, `<div id="home"><div id="h-needs"></div><div id="h-progress"></div>
+      setHtml(view, `<div id="home"><div id="h-resume"></div><div id="h-needs"></div><div id="h-progress"></div>
         <section id="h-todos"><h3>To-dos</h3>
           <form id="todo-add" autocomplete="off"><input name="title" placeholder="Add a to-do" enterkeyhint="done"><button class="btn" type="submit">Add</button></form>
           <ul class="list" id="todo-list"></ul></section>
@@ -297,6 +305,12 @@
       ...live.filter(s => ['working', 'bg'].includes(sessionDot(s)) || s.status === 'starting').map(sessionRow),
       ...d.runs.filter(r => r.status === 'running' && !r.pendingApproval).map(runRow),
     ];
+    // The sessions that were open when Stroll quit, when the computer didn't reopen them itself:
+    // tap one to resume it and open it. Dismiss needs Stroll 0.18.0 on the computer.
+    const toResume = d.sessions.filter(s => !s.live && s.restorable).sort(byLastTurn);
+    setHtml($('#h-resume'), toResume.length ? `<section id="resume"><h3>Open when Stroll quit<small>tap one to resume it</small></h3>
+      <ul class="list">${toResume.map(resumeRow).join('')}</ul>
+      <div class="actions"><button class="btn primary" data-act="resume-all">Resume all</button>${atLeast(link.ready?.version, '0.18.0') ? '<button class="btn" data-act="resume-dismiss">Dismiss</button>' : ''}</div></section>` : '');
     setHtml($('#h-needs'), section('needs', 'Needs you', needs.join('') || '<li class="empty">Nothing is waiting on you.</li>'));
     setHtml($('#h-progress'), progress.length ? section('progress', 'In progress', progress.join('')) : '');
     const open = d.todos.filter(t => t.status === 'open').sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
@@ -1216,6 +1230,22 @@
     } else if (act === 'notify-off') {
       await unsubscribe().catch(() => {});
       refreshNotify();
+    }
+    else if (act === 'resume' || act === 'resume-all') {
+      // One by one, so the first that can't start says why and stops the rest.
+      const list = act === 'resume' ? [session(el.dataset.id)].filter(s => s && !s.live) : S.data.sessions.filter(s => !s.live && s.restorable);
+      if (!list.length) return;
+      el.disabled = true;
+      let started = 0;
+      for (const s of list) {
+        try { await ask('session:create', { resumeId: s.id, title: s.title, cwd: s.cwd }); started += 1; } catch (_) { break; }
+      }
+      el.disabled = false;
+      if (act === 'resume' && started) go({ type: 'session', id: list[0].id });
+      else if (started) toast(`Resumed ${plural(started, 'session')}`);
+    } else if (act === 'resume-dismiss') {
+      el.disabled = true;
+      try { await ask('session:clearRestorable'); toast('Left closed. They’re under Closed on the computer.'); } catch (_) { el.disabled = false; }
     }
     else if (act === 'todo-toggle') {
       const t = S.data.todos.find(x => x.id === el.dataset.id);

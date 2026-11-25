@@ -78,6 +78,7 @@ button.row:active { background: var(--bg-hover); }
 .approval pre, #wf-preview { font: 13px/1.5 var(--mono); white-space: pre-wrap; word-break: break-word; background: rgba(0, 0, 0, 0.3); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; max-height: 40vh; overflow: auto; }
 .actions { display: flex; gap: 10px; }
 .actions .btn { flex: 1; }
+#resume .actions { margin-top: 10px; }
 .actions.bottom:empty { display: none; }
 .hint { color: var(--text-3); font-size: 12.5px; }
 .working { color: var(--text-2); }

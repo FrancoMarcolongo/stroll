@@ -36,7 +36,7 @@ Stroll runs from this checkout on purpose: an unsigned packaged `.app` would be 
 
 Stroll checks for new versions on its own and shows **Update available**; one click pulls and restarts. From a terminal: `stroll update`.
 
-Restarting ends open sessions. When Stroll comes back, **Resume all** brings them back with their conversations.
+Restarting ends open sessions. When Stroll comes back, it reopens them with their conversations, so they're back on the computer and the phone (**Settings › General › Reopen sessions when Stroll starts**). With that off, or for one that can't start, the Overview lists them under **Open when Stroll quit**: resume one, a trail's or all, or dismiss them. The phone has the same list.
 
 After an update, Stroll shows what changed, once. **Settings › Updates › What's new** shows it again; it's [CHANGELOG.md](CHANGELOG.md).
 
@@ -60,7 +60,7 @@ After an update, Stroll shows what changed, once. **Settings › Updates › Wha
 | Shift+Enter | Shift+Enter | New line in Claude's prompt |
 | Esc | Esc | Interrupt Claude (as in the terminal) |
 
-On Linux, plain Ctrl keys (Ctrl+K, Ctrl+J, Ctrl+R, Ctrl+V…) go to Claude Code, as in a terminal, so Stroll's own shortcuts add Shift. Elsewhere in this README, read ⌘ as Ctrl on Linux (⌘-click is Ctrl-click). Closing the window quits Stroll there; **Resume all** brings sessions back.
+On Linux, plain Ctrl keys (Ctrl+K, Ctrl+J, Ctrl+R, Ctrl+V…) go to Claude Code, as in a terminal, so Stroll's own shortcuts add Shift. Elsewhere in this README, read ⌘ as Ctrl on Linux (⌘-click is Ctrl-click). Closing the window quits Stroll there; sessions come back when it starts again.
 
 - **To-dos:** **Start** opens a session for the to-do. **Hand off** sends it to a background run. While one is going, **Go to** opens it instead of starting another. ⌘-click several to start or hand off them together. Reminders fire as notifications. Marking a to-do done while it has open sessions asks whether to end them.
 - **A to-do's first message** is what Claude gets when it starts; Start and Hand off fill it in. Give it a time under **Start it automatically** and Stroll starts it then, as a session or a background run. The session opens as if you had pressed Start, with your usual Claude Code permissions and nobody watching it; a background run only reads and drafts. It starts in the to-do's working directory (or its trail's) and nowhere else: without one it can't be scheduled, and if the folder is gone it doesn't start. Starting the to-do yourself first cancels the scheduled start. Like workflows, it fires only while Stroll is open and the computer awake; a missed time, or a start that failed, waits in Needs you with **Start now**. Only Stroll's window on the computer can schedule a start: not the phone, and not the `stroll` MCP tools, which can't move a scheduled to-do to another folder either.
@@ -169,6 +169,7 @@ Everything Stroll keeps is in `~/.stroll`, readable only by you:
 ```sh
 npm start                                        # run from source
 STROLL_HOME=/tmp/stroll-test npm start           # separate data folder (runs next to your real Stroll)
+npm test                                         # tests for transcripts, schedules, What's new and the phone's encrypted channel
 node_modules/.bin/electron scripts/render-icon.js   # re-render assets/icon.png from assets/icon.svg
 ```
 

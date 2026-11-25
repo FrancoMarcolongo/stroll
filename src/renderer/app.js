@@ -2576,6 +2576,7 @@ function renderSettings(header, panel) {
         <p class="help">Where sessions and hand-offs start when a to-do has no folder of its own.</p></div>
       <div class="field"><label>Claude Code</label>
         <p class="help">${c.claudeMissing ? '<span class="warn">Not found on your PATH.</span> Install it from claude.com/claude-code, then restart Stroll.' : esc(c.claudePath)}</p></div>
+      ${toggle('set-reopen', c.sessions?.reopenOnStart !== false, 'Reopen sessions when Stroll starts', 'The sessions that were open when it quit (a restart, an update, the computer rebooting) start again, on the computer and the phone. Off, the Overview lists them to resume.')}
     </section>
     <section class="set-group"><h3>Terminal</h3>
       <div class="field two">
@@ -2641,6 +2642,7 @@ function renderSettings(header, panel) {
   bind('#set-n-enabled', 'change', e => save({ notifications: { enabled: e.target.checked } }));
   bind('#set-n-sound', 'change', e => save({ notifications: { sound: e.target.checked } }));
   bind('#set-n-needs', 'change', e => save({ notifications: { needsYou: e.target.checked } }));
+  bind('#set-reopen', 'change', e => save({ sessions: { reopenOnStart: e.target.checked } }));
   bind('#set-n-turns', 'change', e => save({ notifications: { finishedTurns: e.target.checked } }));
   bind('#set-n-runs', 'change', e => save({ notifications: { backgroundRuns: e.target.checked } }));
   bind('#set-connectors', 'change', e => save({ background: { includeConnectors: e.target.checked } }));

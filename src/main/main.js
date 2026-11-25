@@ -441,6 +441,7 @@ function publicConfig() {
     },
     updates: config.updates,
     trails: config.trails,
+    sessions: config.sessions,
     remote: { enabled: Boolean(config.remote?.enabled), relayUrl: config.remote?.relayUrl || '', notify: notifyMode(config.remote?.notify) },
     sidebar: config.sidebar,
     layout: config.layout,
@@ -815,6 +816,15 @@ function openLink(url) {
   return undefined;
 }
 
+// The sessions that were open when Stroll quit, started again (Settings › General). One that
+// can't start stays on the Overview's list, to resume by hand.
+function reopenSessions() {
+  if (config.sessions?.reopenOnStart === false) return;
+  for (const s of store.state.sessions.filter(x => x.restorable)) {
+    try { sessions.create({ resumeId: s.id, title: s.title, cwd: s.cwd }); } catch (e) { console.error(`[stroll] couldn't reopen "${s.title}":`, e.message); }
+  }
+}
+
 async function boot() {
   // Run from source, the Dock would show Electron's icon; use Stroll's.
   app.dock?.setIcon(nativeImage.createFromPath(ICON_PATH));
@@ -922,6 +932,8 @@ async function boot() {
   remote.on('paired', device => notify('Phone paired', `${device.name} can now reach Stroll on this computer.`, { type: 'settings' }, { phones: false }));
   remote.apply().catch(e => console.error('[stroll] phone access:', e.message));
   buildMenu();
+  // Before the window, so it opens with them back.
+  reopenSessions();
   createWindow();
   updateBadge();
   importWorkflows();

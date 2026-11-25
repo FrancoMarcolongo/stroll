@@ -48,6 +48,9 @@ const DEFAULT_CONFIG = {
   // Notes longer than this many words are long: the trail says so, and with autoCondense
   // Claude drafts a shorter version for the user to review.
   trails: { autoCondense: true, condenseAtWords: 800 },
+  // reopenOnStart: Stroll starts again the sessions that were open when it quit (a restart, an
+  // update, the computer rebooting), so they're back on the computer and the phone.
+  sessions: { reopenOnStart: true },
   // Phone access (remote.js). relayUrl: where paired phones find this computer (wss://…).
   // appUrl: where the phone app is served, when that isn't the relay itself.
   // notify: when paired phones are told about something: 'away' (not at Stroll on this

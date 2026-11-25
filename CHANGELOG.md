@@ -2,6 +2,16 @@
 
 Stroll shows the new sections here once, after an update. **Settings › Updates › What's new** shows them all again.
 
+## 0.18.0 — 2026-11-25
+
+### Sessions come back on their own
+- **When Stroll starts, it reopens the sessions that were open when it quit,** with their conversations: after an update, a restart or the computer rebooting, they're back on the computer and on the phone without a click. **Settings › General › Reopen sessions when Stroll starts** turns it off. One that can't start stays on the Overview's **Open when Stroll quit**, to resume by hand.
+
+### Resume from the phone
+- **The phone's home lists the sessions open when Stroll quit,** when they weren't reopened. Tap one to resume it and open it, or **Resume all**. **Dismiss** leaves them closed (they stay under Closed on the computer).
+
+Nothing to install on the phone: the app loads the new version the next time it's opened.
+
 ## 0.17.1 — 2026-11-25
 
 ### Beside the journey, and from the menu
