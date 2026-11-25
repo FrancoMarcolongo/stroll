@@ -227,17 +227,55 @@ details[open] > summary::before { transform: rotate(90deg); }
 .overview-head { display: flex; flex-direction: column; gap: 2px; margin-bottom: 22px; }
 .overview-head h1 { margin: 0; font-size: 22px; font-weight: 700; letter-spacing: -0.2px; }
 .overview-head .h-meta { color: var(--text-3); font-size: 12.5px; }
-.overview { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 16px; max-width: 1400px; align-items: start; }
+/* One column in a narrow window, or beside the journey; two (sessions on the left) when wide.
+   Narrow, the columns step aside so the cards stack: resume, needs you, sessions, runs, to-dos. */
+.ov-wrap { container-type: inline-size; max-width: 1400px; }
+.overview { display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; align-items: start; }
+.ov-col { display: contents; }
+/* The single column's order; within each of the two columns it's the same. */
+.card.resume { order: 1; } .card.needs { order: 2; } .card.open { order: 3; } .card.coming { order: 4; } .card.runs { order: 5; }
+.card.todos { order: 6; } .card.elsewhere { order: 7; } .card.pickup { order: 8; } .card.idle { order: 9; }
+@container (min-width: 760px) {
+  .overview { grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); }
+  .ov-col { display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; align-content: start; }
+}
 .card { background: var(--bg-side); border: 1px solid var(--line-soft); border-radius: 12px; padding: 12px 8px 8px; min-height: 140px; }
-.card h3 { margin: 0 0 6px; padding: 0 8px; font-size: 12px; font-weight: 650; color: var(--text-2); display: flex; align-items: center; gap: 8px; }
+.card[hidden] { display: none; }
+.card h3 { margin: 0 0 6px; padding: 0 8px; font-size: 12px; font-weight: 650; color: var(--text-2); display: flex; align-items: center; gap: 8px; min-height: 24px; }
 .card h3 .card-icon { width: 24px; height: 24px; border-radius: 7px; display: grid; place-items: center; }
 .card h3 .card-icon svg { width: 14px; height: 14px; }
+.card.resume h3 .card-icon { background: var(--blue-soft); color: var(--blue); }
 .card.needs h3 .card-icon { background: var(--amber-soft); color: var(--amber); }
-.card.progress h3 .card-icon { background: var(--green-soft); color: var(--green); }
+.card.open h3 .card-icon { background: var(--green-soft); color: var(--green); }
+.card.runs h3 .card-icon { background: var(--green-soft); color: var(--green); }
+.card.coming h3 .card-icon { background: var(--violet-soft); color: var(--violet); }
 .card.todos h3 .card-icon { background: var(--accent-soft); color: var(--accent); }
+/* Cards for a look now and then: running elsewhere, pick up again, idle for a day. */
+.card.quiet { min-height: 0; }
+.card.quiet h3 .card-icon { background: var(--bg-raised); color: var(--text-2); }
+.card.pickup .row.dim .title { color: var(--text); }
+.card.coming { min-height: 0; }
+.card-actions[hidden] { display: none; }
+.row .sub .ctx { color: var(--text-2); }
+.row .row-icon { width: 8px; flex: none; display: grid; place-items: center; color: var(--text-3); }
+.row .row-icon svg { width: 13px; height: 13px; }
 .card h3 .count { margin-left: auto; }
 .card .list { padding: 0; }
 .card .empty { padding: 14px 8px; color: var(--text-3); }
+.card.resume { min-height: 0; border-color: var(--line); }
+.card h3:has(.card-actions:not([hidden])) .count { margin-left: 0; }
+.card.resume .row.dim .title { color: var(--text); }
+.card-actions { margin-left: auto; display: flex; gap: 6px; }
+.card.runs { min-height: 0; }
+/* A trail's heading over its sessions; opens the trail. */
+.list .group { display: flex; align-items: center; gap: 7px; padding: 10px 8px 4px; color: var(--text-2); font-size: 11.5px; font-weight: 600; cursor: pointer; border-radius: 7px; min-height: 30px; }
+.list .group:first-child { padding-top: 4px; }
+.list .group > svg { width: 12px; height: 12px; flex: none; color: var(--text-3); }
+.list .group .g-title { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.list .group[data-kind]:hover .g-title { color: var(--text); text-decoration: underline; text-underline-offset: 2px; }
+.list .group.plain { cursor: default; color: var(--text-3); }
+.list .group .row-actions { margin-left: auto; }
+.list .group:hover .row-actions { display: flex; }
 
 /* to-do view */
 .todo-view { max-width: 860px; display: grid; gap: 18px; }

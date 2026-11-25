@@ -89,4 +89,43 @@ function firstPrompt(id) {
   return file ? describe(file).prompt : null;
 }
 
-module.exports = { recentSessions, transcriptFor, firstPrompt };
+// Claude Code sessions running right now that Stroll didn't start (`knownIds`), from Claude
+// Code's own list of its live processes: ~/.claude/sessions/<pid>.json, with the session id,
+// folder, name and busy/idle. It isn't a documented format, so anything unexpected is skipped.
+const RUNNING = path.join(os.homedir(), '.claude', 'sessions');
+const described = new Map(); // session id → { title, cwd } from its transcript
+const isoOf = v => (Number.isFinite(Number(v)) && Number(v) > 0 ? new Date(Number(v)).toISOString() : null);
+
+function runningElsewhere(knownIds = new Set()) {
+  let files;
+  try { files = fs.readdirSync(RUNNING).filter(f => /^\d+\.json$/.test(f)); } catch (_) { return []; }
+  const out = [];
+  for (const f of files) {
+    let d;
+    try { d = JSON.parse(fs.readFileSync(path.join(RUNNING, f), 'utf8')); } catch (_) { continue; }
+    const pid = Number(d.pid || f.split('.')[0]);
+    if (!d.sessionId || knownIds.has(d.sessionId) || (d.kind && d.kind !== 'interactive')) continue;
+    // A file left behind by a process that's gone.
+    try { process.kill(pid, 0); } catch (e) { if (e.code !== 'EPERM') continue; }
+    let info = described.get(d.sessionId);
+    if (!info) {
+      const file = transcriptFor(d.sessionId);
+      const desc = file ? describe(file) : {};
+      info = { title: desc.title || desc.prompt || null, cwd: desc.cwd || null };
+      if (info.title) described.set(d.sessionId, info); // until it has one, look again next time
+    }
+    const title = (d.nameSource === 'user' && d.name) || info.title || d.name || 'Untitled session';
+    out.push({
+      id: d.sessionId,
+      pid,
+      title: String(title).replace(/\s+/g, ' ').slice(0, 90),
+      cwd: d.cwd || info.cwd,
+      busy: d.status === 'busy',
+      startedAt: isoOf(d.startedAt),
+      updatedAt: isoOf(d.statusUpdatedAt || d.updatedAt) || isoOf(d.startedAt),
+    });
+  }
+  return out.sort((a, b) => (b.updatedAt || '').localeCompare(a.updatedAt || ''));
+}
+
+module.exports = { recentSessions, transcriptFor, firstPrompt, runningElsewhere };

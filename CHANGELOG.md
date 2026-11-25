@@ -2,6 +2,20 @@
 
 Stroll shows the new sections here once, after an update. **Settings › Updates › What's new** shows them all again.
 
+## 0.16.0 — 2026-11-25
+
+### A fuller Overview
+- **Every open session, by trail.** The Overview used to show only the sessions at work; now it lists them all, under their trail's name. Click the name to open the trail, or the ▶ beside it for a new session on it.
+- **After a restart, pick what to resume.** The sessions that were open when Stroll quit are listed at the top, by trail: resume one, a trail's, or all, or dismiss them.
+- **Coming up:** what's scheduled for the next day, soonest first: to-dos that start a session or hand off, reminders, and workflows that come due or prepare a run.
+- **Pick up again:** sessions you closed after working in them in the last two days, on an active trail or for an open to-do, each with Resume.
+- **Idle for a day:** open sessions nobody has used in a day, to close one by one or all at once. They stay under Closed, to resume.
+- **Running elsewhere:** Claude Code sessions running in a terminal outside Stroll, working or idle. Opening one here starts a second copy, so it asks first.
+- Cards with nothing to show stay out of the way. A wide window shows sessions on the left and the rest on the right; a narrow one, everything in one column, most urgent first.
+
+### Times that survive a restart
+- **Sessions are ordered, and timed, by when you or Claude last did something in them:** a prompt, a finished turn, a question. Resuming one doesn't count, so after a restart they keep their place and their age instead of all saying "now". This holds for the menu, ⌘1–9, a trail's page and the Overview.
+
 ## 0.15.0 — 2026-11-25
 
 ### Three columns

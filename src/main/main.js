@@ -21,7 +21,7 @@ const { Sessions } = require('./sessions');
 const { Runs } = require('./runs');
 const { Approvals } = require('./approvals');
 const { Server, writeHookSettings, writeMcpConfig } = require('./server');
-const { recentSessions, firstPrompt } = require('./recent');
+const { recentSessions, firstPrompt, runningElsewhere } = require('./recent');
 const { parseFields, renderTemplate, dueSlot, nextSlot, validSchedule } = require('./workflows');
 const { parseChangelog, cmpVersion, unseenSections } = require('./changelog');
 const files = require('./files');
@@ -755,10 +755,10 @@ function registerIpc() {
     return r ? store.addWorkflow({ name: r.title.replace(/ · .*$/, ''), cwd: r.cwd, mode: 'run', template: r.prompt, runAllowAll: Boolean(r.allowAll), trailId: r.trailId || null, writeDirs: r.writeDirs || [] }) : null;
   });
 
-  handle('recent:list', () => {
-    const known = new Set(store.state.sessions.flatMap(s => [s.id, s.claudeSessionId]).concat(store.state.runs.map(r => r.id)));
-    return recentSessions(known);
-  });
+  // Sessions and runs Stroll knows, by every id Claude Code may use for them.
+  const knownIds = () => new Set(store.state.sessions.flatMap(s => [s.id, s.claudeSessionId]).concat(store.state.runs.map(r => r.id)));
+  handle('recent:list', () => recentSessions(knownIds()));
+  handle('elsewhere:list', () => runningElsewhere(knownIds()));
 
   handle('config:set', patch => {
     saveOverrides(patch);

@@ -57,9 +57,9 @@ function previewFromText(text) {
   return (lines.find(l => !l.heading) || lines[0]).text.slice(0, 160);
 }
 
-// Text of the last assistant message in a transcript, reading only its tail.
-function lastAssistantText(file) {
-  if (!file || !fs.existsSync(file)) return null;
+// The last lines of a transcript, reading only its tail ([] when unreadable).
+function transcriptTail(file) {
+  if (!file || !fs.existsSync(file)) return [];
   try {
     const size = fs.statSync(file).size;
     const fd = fs.openSync(file, 'r');
@@ -67,16 +67,36 @@ function lastAssistantText(file) {
     const buf = Buffer.alloc(len);
     fs.readSync(fd, buf, 0, len, size - len);
     fs.closeSync(fd);
-    const lines = buf.toString('utf8').split('\n');
-    for (let i = lines.length - 1; i >= 0; i -= 1) {
-      if (!lines[i].includes('"assistant"')) continue;
-      let d;
-      try { d = JSON.parse(lines[i]); } catch (_) { continue; }
-      if (d.type !== 'assistant' || d.isSidechain) continue;
-      const text = (d.message?.content || []).filter(c => c.type === 'text').map(c => c.text).join('\n').trim();
-      if (text) return text;
+    return buf.toString('utf8').split('\n');
+  } catch (_) { return []; }
+}
+
+// Text of the last assistant message in a transcript.
+function lastAssistantText(file) {
+  const lines = transcriptTail(file);
+  for (let i = lines.length - 1; i >= 0; i -= 1) {
+    if (!lines[i].includes('"assistant"')) continue;
+    let d;
+    try { d = JSON.parse(lines[i]); } catch (_) { continue; }
+    if (d.type !== 'assistant' || d.isSidechain) continue;
+    const text = (d.message?.content || []).filter(c => c.type === 'text').map(c => c.text).join('\n').trim();
+    if (text) return text;
+  }
+  return null;
+}
+
+// When the last message (yours or Claude's) was written. The file's own time won't do: resuming
+// a session touches it.
+function lastMessageAt(file) {
+  const lines = transcriptTail(file);
+  for (let i = lines.length - 1; i >= 0; i -= 1) {
+    if (!lines[i].includes('"timestamp"')) continue;
+    let d;
+    try { d = JSON.parse(lines[i]); } catch (_) { continue; }
+    if ((d.type === 'user' || d.type === 'assistant') && !d.isSidechain && d.timestamp && !Number.isNaN(Date.parse(d.timestamp))) {
+      return new Date(d.timestamp).toISOString();
     }
-  } catch (_) { /* unreadable transcript: no preview */ }
+  }
   return null;
 }
 
@@ -356,6 +376,12 @@ class Sessions extends EventEmitter {
         if (payload.source !== 'compact') patch.status = 'idle';
         if (payload.source === 'resume') patch.preview = previewFromText(lastAssistantText(transcriptPath)) || s.preview || null;
         if (payload.source === 'clear') patch.preview = null;
+        // lastTurnAt: when you or Claude last did something in it (a prompt, a finished turn, a
+        // question), for the order and times of session lists and "idle for a day"; a resume
+        // doesn't count. The transcript has it for sessions from before it was kept, or
+        // continued outside Stroll.
+        const lastMsg = lastMessageAt(transcriptPath);
+        if (lastMsg && (!s.lastTurnAt || lastMsg > s.lastTurnAt)) patch.lastTurnAt = lastMsg;
         this.store.patchSession(id, patch);
         break;
       }
@@ -367,11 +393,11 @@ class Sessions extends EventEmitter {
           if (e) { for (const t of endedIds(raw)) e.bg.end(t); this.store.patchSession(id, { background: e.bg.list() }); }
           this.syncBackground(id);
           const summary = oneLine(raw.match(/<summary>([\s\S]*?)<\/summary>/)?.[1]).replace(/&quot;/g, '"').replace(/&gt;/g, '>').replace(/&lt;/g, '<').replace(/&amp;/g, '&');
-          this.store.patchSession(id, { status: 'working', unseen: false, lastActivityAt: at, preview: `↻ ${summary || 'Background task finished'}` });
+          this.store.patchSession(id, { status: 'working', unseen: false, lastActivityAt: at, lastTurnAt: at, preview: `↻ ${summary || 'Background task finished'}` });
           break;
         }
         const prompt = oneLine(raw);
-        const patch = { status: 'working', unseen: false, lastActivityAt: at, preview: prompt ? `› ${prompt}` : s.preview };
+        const patch = { status: 'working', unseen: false, lastActivityAt: at, lastTurnAt: at, preview: prompt ? `› ${prompt}` : s.preview };
         if (!s.title && prompt) patch.title = prompt.slice(0, 80);
         this.store.patchSession(id, patch);
         break;
@@ -381,7 +407,7 @@ class Sessions extends EventEmitter {
         const question = payload.tool_name === 'ExitPlanMode'
           ? 'Plan ready for your approval'
           : oneLine(payload.tool_input?.questions?.[0]?.question) || 'Claude has a question for you';
-        this.store.patchSession(id, { status: 'waiting', preview: question, lastActivityAt: at });
+        this.store.patchSession(id, { status: 'waiting', preview: question, lastActivityAt: at, lastTurnAt: at });
         this.emit('attention', id, question, 'needsYou');
         break;
       }
@@ -395,7 +421,7 @@ class Sessions extends EventEmitter {
         // and auth_success is informational: neither is a new request.
         if (payload.notification_type === 'idle_prompt' || payload.notification_type === 'auth_success') break;
         const message = oneLine(payload.message) || 'Needs your input';
-        this.store.patchSession(id, { status: 'waiting', preview: message, lastActivityAt: at });
+        this.store.patchSession(id, { status: 'waiting', preview: message, lastActivityAt: at, lastTurnAt: at });
         this.emit('attention', id, message, 'needsYou');
         break;
       }
@@ -403,7 +429,7 @@ class Sessions extends EventEmitter {
         this.syncBackground(id);
         const text = payload.last_assistant_message || lastAssistantText(payload.transcript_path || s.transcriptPath);
         const preview = previewFromText(text);
-        this.store.patchSession(id, { status: 'idle', unseen: true, preview: preview || s.preview, lastActivityAt: at });
+        this.store.patchSession(id, { status: 'idle', unseen: true, preview: preview || s.preview, lastActivityAt: at, lastTurnAt: at });
         this.emit('attention', id, preview || 'Finished — your turn', 'finishedTurns');
         break;
       }

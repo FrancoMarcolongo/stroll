@@ -30,6 +30,7 @@ const S = {
   query: '', // sidebar search
   searchIdx: 0,
   searchKey: null, // the row the keyboard cursor is on, as kind:id
+  elsewhere: [], // Claude Code sessions running outside Stroll, for the Overview
 };
 const terms = new Map(); // session id -> { term, fit, el, lastSeq, ready, queue }
 
@@ -65,9 +66,15 @@ function toLocalInput(iso) {
 }
 const todo = id => S.data.todos.find(t => t.id === id);
 const session = id => S.data.sessions.find(s => s.id === id);
-// Live sessions in sidebar order (latest activity first); ⌘1–9 and Ctrl+Tab follow it.
 const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
-const liveSessions = () => S.data.sessions.filter(s => s.live).sort((a, b) => (b.lastActivityAt || '').localeCompare(a.lastActivityAt || ''));
+// When you or Claude last did something in a session: a prompt, a finished turn, a question.
+// Resuming doesn't count (it moves lastActivityAt), so after a restart sessions keep their place
+// and their time. lastTurnAt comes from the hooks and the transcript; sessions not resumed
+// since it was kept fall back.
+const lastTurn = s => s.lastTurnAt || s.finishedAt || s.lastActivityAt;
+const byLastTurn = (a, b) => (lastTurn(b) || '').localeCompare(lastTurn(a) || '');
+// Live sessions in sidebar order (latest turn first); ⌘1–9 and Ctrl+Tab follow it.
+const liveSessions = () => S.data.sessions.filter(s => s.live).sort(byLastTurn);
 const run = id => S.data.runs.find(r => r.id === id);
 const workflow = id => (S.data.workflows || []).find(w => w.id === id);
 const trail = id => (id ? (S.data.trails || []).find(t => t.id === id) : undefined);
@@ -109,6 +116,8 @@ const ICON = {
   x: svgIcon('<path d="M18 6L6 18M6 6l12 12"/>'),
   panelLeft: svgIcon('<rect x="3" y="4" width="18" height="16" rx="2.5"/><path d="M9 4v16"/><path d="M15.5 10l-2 2 2 2"/>'),
   panelRight: svgIcon('<rect x="3" y="4" width="18" height="16" rx="2.5"/><path d="M15 4v16"/><path d="M8.5 10l2 2-2 2"/>'),
+  monitor: svgIcon('<rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/>'),
+  moon: svgIcon('<path d="M20 14.5A8 8 0 019.5 4a8 8 0 1010.5 10.5z"/>'),
 };
 document.querySelectorAll('[data-icon]').forEach(el => { el.innerHTML = ICON[el.dataset.icon] || ''; });
 
@@ -383,7 +392,7 @@ function trailDot(tr) {
   const dots = [...trailSessions(tr).filter(s => s.live).map(sessionDot), ...trailRuns(tr).map(runDot), ...trailWorkflows(tr).map(workflowDot)];
   return ['waiting', 'idle', 'working', 'bg'].find(d => dots.includes(d)) || 'none';
 }
-const lastActivity = list => list.map(x => x.lastActivityAt || x.finishedAt || x.startedAt).filter(Boolean).sort().pop() || null;
+const lastActivity = list => list.map(x => x.lastTurnAt || x.finishedAt || x.lastActivityAt || x.startedAt).filter(Boolean).sort().pop() || null;
 function trailSub(tr) {
   const live = trailSessions(tr).filter(s => s.live).length;
   const open = trailTodos(tr).filter(t => t.status === 'open').length;
@@ -397,7 +406,7 @@ function trailWork(tr) {
   const live = trailSessions(tr).filter(s => s.live);
   if (live.length) {
     const rank = s => ({ waiting: 0, idle: 1, working: 2, bg: 3 }[sessionDot(s)] ?? 4);
-    live.sort((a, b) => rank(a) - rank(b) || (b.lastActivityAt || '').localeCompare(a.lastActivityAt || ''));
+    live.sort((a, b) => rank(a) - rank(b) || byLastTurn(a, b));
     return { type: 'session', id: live[0].id };
   }
   const runs = trailRuns(tr);
@@ -454,7 +463,7 @@ function activeWork(t) {
   const live = t.sessionIds.map(session).filter(s => s && s.live);
   if (live.length) {
     const rank = s => ({ waiting: 0, idle: 1, working: 2, bg: 3 }[sessionDot(s)] ?? 4);
-    live.sort((a, b) => rank(a) - rank(b) || (b.lastActivityAt || '').localeCompare(a.lastActivityAt || ''));
+    live.sort((a, b) => rank(a) - rank(b) || byLastTurn(a, b));
     return { type: 'session', id: live[0].id };
   }
   const runs = t.runIds.map(run).filter(Boolean);
@@ -481,15 +490,130 @@ function todoRow(t) {
   </li>`;
 }
 
-function sessionRow(s) {
+function sessionRow(s) { return sessionItem(s, ''); }
+// A session that was open when Stroll quit, with its own Resume button (the Overview).
+function resumeRow(s) { return sessionItem(s, resumeBtn); }
+// `when` replaces the time on the right; `context` (a trail or to-do) leads the line under the title.
+function sessionItem(s, actions, { when, context } = {}) {
   const st = sessionState(s);
   const isActive = S.view.type === 'session' && S.view.id === s.id;
   const preview = s.preview || (s.live ? SESSION_LABEL[st] || st : 'closed');
   return `<li class="row ${isActive ? 'active' : ''} ${s.live ? '' : 'dim'}" data-kind="session" data-id="${esc(s.id)}" title="${esc(shortDir(s.cwd))}">
     ${dotHtml(sessionDot(s))}
-    <div class="main"><div class="title-line"><span class="title">${hl(s.title || 'Untitled session')}</span>${bgBadge(s)}${s.muted ? `<span class="muted-icon" title="Notifications muted">${ICON.mute}</span>` : ''}<span class="when">${ago(s.lastActivityAt)}</span></div>
-    ${snippet([s.title, preview], s.firstMessage, shortDir(s.cwd)) || `<div class="sub">${hl(preview)}</div>`}</div>
+    <div class="main"><div class="title-line"><span class="title">${hl(s.title || 'Untitled session')}</span>${bgBadge(s)}${s.muted ? `<span class="muted-icon" title="Notifications muted">${ICON.mute}</span>` : ''}<span class="when">${esc(when ?? ago(lastTurn(s)))}</span></div>
+    ${snippet([s.title, preview], s.firstMessage, shortDir(s.cwd)) || `<div class="sub">${context ? `<span class="ctx">${esc(context)}</span> · ` : ''}${hl(preview)}</div>`}</div>
+    ${actions}
   </li>`;
+}
+
+// ---------- Overview extras ----------
+const HOUR = 60 * 60 * 1000;
+const resumeBtn = `<span class="row-actions"><button class="icon-btn" data-act="resume-row" title="Resume it">${ICON.resume}</button></span>`;
+// Open sessions untouched for a day: closing one frees its memory, and it stays under Closed to
+// resume. Not one that needs you, is working, runs something in the background or is unread.
+const idleForADay = s => s.live && s.status === 'idle' && !s.unseen && !s.background?.length
+  && Date.now() - new Date(lastTurn(s)).getTime() > 24 * HOUR;
+function idleRow(s) {
+  return sessionItem(s, `<span class="row-actions"><button class="icon-btn" data-act="close-idle" title="Close it. It stays under Closed, to resume.">${ICON.x}</button></span>`,
+    { when: `idle ${ago(lastTurn(s))}`, context: trail(s.trailId)?.title });
+}
+
+// Closed sessions worked in during the last two days, on a trail still active or linked to a
+// to-do still open: work likely to be picked up again. Not one closed after idling for days
+// (by its last turn, not when it closed); the ones open when Stroll quit have their own card.
+function pickupSessions(d) {
+  const openTodos = new Set(d.todos.filter(t => t.status === 'open').map(t => t.id));
+  return d.sessions
+    .filter(s => !s.live && !s.restorable && Date.now() - new Date(lastTurn(s)).getTime() < 48 * HOUR
+      && ((trail(s.trailId) && trail(s.trailId).status !== 'archived') || s.todoIds.some(id => openTodos.has(id))))
+    .sort(byLastTurn)
+    .slice(0, 6);
+}
+function pickupRow(s) {
+  return sessionItem(s, resumeBtn, { context: trail(s.trailId)?.title || s.todoIds.map(todo).find(t => t && t.status === 'open')?.title });
+}
+
+// What's scheduled in the next day: to-dos that start a session or hand off, reminders, and
+// workflows that come due or prepare a run. One row per to-do, at its earliest time.
+function upcoming(d) {
+  const now = Date.now();
+  const soon = iso => { const ms = iso ? new Date(iso).getTime() : NaN; return ms > now && ms <= now + 24 * HOUR; };
+  const items = [];
+  for (const t of d.todos) {
+    if (t.status !== 'open') continue;
+    const bits = [];
+    if (soon(t.startAt)) bits.push({ at: t.startAt, text: t.startMode === 'run' ? 'Hands off to a background run' : 'Starts a session' });
+    if (soon(t.remindAt) && !t.remindedAt) bits.push({ at: t.remindAt, text: 'Reminder' });
+    if (bits.length) items.push({ kind: 'todo', id: t.id, title: t.title, bits, at: bits.map(b => b.at).sort()[0], icon: soon(t.startAt) ? ICON.playClock : ICON.clock });
+  }
+  for (const w of d.workflows || []) {
+    if (!soon(w.nextAt)) continue;
+    items.push({ kind: 'workflow', id: w.id, title: w.name, at: w.nextAt, icon: ICON.list,
+      bits: [{ at: w.nextAt, text: w.schedule?.action === 'prepare' ? 'Prepares a run' : 'Comes due' }] });
+  }
+  return items.sort((a, b) => a.at.localeCompare(b.at));
+}
+function inText(iso) {
+  const m = Math.max(1, Math.round((new Date(iso).getTime() - Date.now()) / 60000));
+  return m < 60 ? `in ${m}m` : m < 24 * 60 ? `in ${Math.round(m / 60)}h` : `in ${Math.round(m / 1440)}d`;
+}
+function upcomingRow(u) {
+  return `<li class="row" data-kind="${u.kind}" data-id="${esc(u.id)}">
+    <span class="row-icon">${u.icon}</span>
+    <div class="main"><div class="title-line"><span class="title">${esc(u.title)}</span><span class="when">${inText(u.at)}</span></div>
+    <div class="sub">${u.bits.map(b => esc(`${b.text} ${slotText(b.at)}`)).join(' · ')}</div></div>
+  </li>`;
+}
+
+// Claude Code sessions running in a terminal, outside Stroll (from Claude Code's own list of
+// its processes; refreshed while the Overview shows).
+function elsewhereRow(r) {
+  return `<li class="row" data-kind="elsewhere" data-id="${esc(r.id)}" title="${esc(shortDir(r.cwd))}">
+    ${dotHtml(r.busy ? 'working' : 'none')}
+    <div class="main"><div class="title-line"><span class="title">${esc(r.title)}</span><span class="when">${ago(r.updatedAt)}</span></div>
+    <div class="sub">${r.busy ? 'Working' : 'Idle'} in a terminal · ${esc(shortDir(r.cwd))}</div></div>
+    <span class="row-actions"><button class="icon-btn" data-act="elsewhere-open" title="Open a copy here">${ICON.resume}</button></span>
+  </li>`;
+}
+async function refreshElsewhere() {
+  try { S.elsewhere = await api.invoke('elsewhere:list'); } catch (_) { S.elsewhere = []; }
+  if (S.view.type === 'home' && $('#panel').dataset.view === 'home') renderHome($('#view-header'), $('#panel'));
+}
+async function openElsewhere(id) {
+  const r = S.elsewhere.find(x => x.id === id);
+  if (!r) return undefined;
+  const ok = await confirmModal({
+    title: `Open “${r.title}” here too?`,
+    body: 'It’s running in a terminal. Opening it here starts a second copy of the conversation, and the two can drift apart. Closing the terminal one first avoids that.',
+    confirm: 'Open a copy',
+  });
+  if (!ok) return undefined;
+  S.elsewhere = S.elsewhere.filter(x => x.id !== id);
+  return resumeSession(r.id, r.title, r.cwd);
+}
+
+// Sessions grouped by trail, for the Overview: a heading per trail (in the sidebar's order,
+// sessions on no trail last), then its sessions, latest turn first. With no trail at all
+// there are no headings. `headAction` is the headings' hover button.
+function sessionsByTrail(list, row, headAction = '') {
+  const groups = new Map();
+  for (const s of list) {
+    const key = trail(s.trailId) ? s.trailId : '';
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(s);
+  }
+  if (groups.size === 1 && groups.has('')) return groups.get('').sort(byLastTurn).map(row).join('');
+  const order = [...activeTrails(), ...(S.data.trails || []).filter(t => t.status === 'archived')].map(t => t.id);
+  const keys = [...groups.keys()].sort((a, b) => (a === '') - (b === '') || order.indexOf(a) - order.indexOf(b));
+  return keys.map(key => {
+    const ss = groups.get(key).sort(byLastTurn);
+    const tr = trail(key);
+    const sugg = tr ? (tr.suggestions?.length || 0) + (tr.condense?.status === 'ready' ? 1 : 0) : 0;
+    const head = tr
+      ? `<li class="group" data-kind="trail" data-id="${esc(tr.id)}" title="Open the trail">${ICON.trail}<span class="g-title">${esc(tr.title)}</span><span class="count">${ss.length}</span>${sugg ? `<span class="sugg-badge" title="${plural(sugg, 'suggestion')} for the notes">${ICON.note}${sugg}</span>` : ''}${headAction ? `<span class="row-actions">${headAction}</span>` : ''}</li>`
+      : `<li class="group plain"><span class="g-title">No trail</span><span class="count">${ss.length}</span></li>`;
+    return head + ss.map(row).join('');
+  }).join('');
 }
 
 function runRow(r) {
@@ -1125,7 +1249,7 @@ function renderTrailLive() {
   const others = (S.data.workflows || []).filter(w => w.trailId !== tr.id);
   const addWfOptions = `<option value="">Connect a workflow…</option>${others.map(w => `<option value="${esc(w.id)}">${esc(w.name)}${trail(w.trailId) ? ` (now on “${esc(trail(w.trailId).title)}”)` : ''}</option>`).join('')}<option value="__new">New workflow on this trail…</option>`;
   if (document.activeElement !== addWf && addWf.dataset.markup !== addWfOptions) { addWf.innerHTML = addWfOptions; addWf.dataset.markup = addWfOptions; }
-  const sess = trailSessions(tr).sort((a, b) => (b.live - a.live) || (b.lastActivityAt || '').localeCompare(a.lastActivityAt || ''));
+  const sess = trailSessions(tr).sort((a, b) => (b.live - a.live) || byLastTurn(a, b));
   patchList($('#trail-sessions'), sess.slice(0, 15).map(sessionRow).join('')
     + (sess.length > 15 ? `<li class="empty" style="padding-left:0">and ${sess.length - 15} older</li>` : '')
     || '<li class="empty" style="padding-left:0">None yet. Start one, or add a session to this trail from its header.</li>');
@@ -1134,9 +1258,18 @@ function renderTrailLive() {
   patchList($('#trail-runs'), runs.slice(0, 10).map(runRow).join(''));
 }
 
+// The Overview. Sessions on the left: what was open when Stroll quit (to resume), what needs you,
+// every open session by trail, Claude Code running elsewhere, recently closed work to pick up.
+// The rest on the right: what's coming up, background runs at work, to-dos, open sessions idle
+// for a day. Narrow, one column in that order. Cards with nothing to show are hidden, except
+// Needs you, Open sessions and To-dos.
 function renderHome(header, panel) {
   const d = S.data;
   const live = d.sessions.filter(s => s.live);
+  const restorable = d.sessions.filter(s => !s.live && s.restorable);
+  const pickup = pickupSessions(d);
+  const idle = live.filter(idleForADay).sort((a, b) => lastTurn(a).localeCompare(lastTurn(b)));
+  const coming = upcoming(d);
   const n = needsYou(d);
   const needs = [
     ...n.waiting.map(sessionRow),
@@ -1146,29 +1279,63 @@ function renderHome(header, panel) {
     ...n.workflows.map(workflowRow),
     ...n.yourTurn.map(sessionRow),
   ];
-  const progress = [...live.filter(s => s.status === 'working' || s.status === 'starting' || sessionDot(s) === 'bg').map(sessionRow), ...d.runs.filter(r => r.status === 'running' && !r.pendingApproval).map(runRow)];
+  // A run waiting for an OK is under Needs you.
+  const running = d.runs.filter(r => r.status === 'running' && !r.pendingApproval).sort((a, b) => (b.startedAt || '').localeCompare(a.startedAt || ''));
   const open = d.todos.filter(t => t.status === 'open').sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
   // Built once per visit; later state pushes only patch the counts and lists.
   if (panel.dataset.view !== 'home') {
     header.innerHTML = `<span class="h-title">Overview</span><span class="spacer"></span><button class="btn primary" data-act="new-session">${ICON.plus}New session</button>`;
-    const card = (cls, icon, title, id) => `<div class="card ${cls}"><h3><span class="card-icon">${ICON[icon]}</span>${title}<span class="count" id="${id}-n"></span></h3><ul class="list" id="${id}"></ul></div>`;
+    const card = (cls, icon, title, id, extra = '') => `<div class="card ${cls}" id="${id}-card"><h3><span class="card-icon">${ICON[icon]}</span>${title}<span class="count" id="${id}-n"></span>${extra}</h3><ul class="list" id="${id}"></ul></div>`;
     panel.innerHTML = `
       <div class="overview-head"><h1>${greeting()}</h1><span class="h-meta" id="ov-meta"></span></div>
-      <div class="overview">
-        ${card('needs', 'bell', 'Needs you', 'ov-needs')}
-        ${card('progress', 'activity', 'In progress', 'ov-progress')}
-        ${card('todos', 'list', 'To-dos', 'ov-todos')}
-      </div>`;
+      <div class="ov-wrap"><div class="overview">
+        <div class="ov-col">
+          ${card('resume', 'resume', 'Open when Stroll quit', 'ov-resume', `<span class="card-actions"><button class="btn sm primary" data-act="restore-all">Resume all</button><button class="btn sm ghost" data-act="restore-dismiss" title="Leave them closed. They stay under Closed in the menu.">Dismiss</button></span>`)}
+          ${card('needs', 'bell', 'Needs you', 'ov-needs')}
+          ${card('open', 'terminal', 'Open sessions', 'ov-open')}
+          ${card('elsewhere quiet', 'monitor', 'Running elsewhere', 'ov-elsewhere')}
+          ${card('pickup quiet', 'resume', 'Pick up again', 'ov-pickup')}
+        </div>
+        <div class="ov-col">
+          ${card('coming', 'clock', 'Coming up', 'ov-coming')}
+          ${card('runs', 'activity', 'Background runs', 'ov-runs')}
+          ${card('todos', 'list', 'To-dos', 'ov-todos')}
+          ${card('idle quiet', 'moon', 'Idle for a day', 'ov-idle', '<span class="card-actions"><button class="btn sm ghost" data-act="close-idle-all" title="They stay under Closed, to resume">Close all</button></span>')}
+        </div>
+      </div></div>`;
     panel.dataset.view = 'home';
+    refreshElsewhere();
   }
   const empty = text => `<li class="empty">${text}</li>`;
   const today = new Date().toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' });
-  $('#ov-meta').textContent = `${today} · ${live.length} live session${live.length === 1 ? '' : 's'} · ${plural(d.runs.filter(r => r.status === 'running').length, 'background run')} · ${open.length} open to-do${open.length === 1 ? '' : 's'}`;
+  $('#ov-meta').textContent = [today, plural(live.length, 'open session'), restorable.length && `${restorable.length} to resume`,
+    plural(d.runs.filter(r => r.status === 'running').length, 'background run'), plural(open.length, 'open to-do')].filter(Boolean).join(' · ');
+
+  $('#ov-resume-card').hidden = !restorable.length;
+  $('#ov-resume-n').textContent = restorable.length || '';
+  patchList($('#ov-resume'), sessionsByTrail(restorable, resumeRow, `<button class="icon-btn" data-act="resume-trail" title="Resume this trail’s sessions">${ICON.resume}</button>`));
+
   $('#ov-needs-n').textContent = needs.length || '';
-  $('#ov-progress-n').textContent = progress.length || '';
-  $('#ov-todos-n').textContent = open.length || '';
   patchList($('#ov-needs'), needs.join('') || empty('All clear.'));
-  patchList($('#ov-progress'), progress.join('') || empty('Nothing running.'));
+
+  $('#ov-open-n').textContent = live.length || '';
+  patchList($('#ov-open'), sessionsByTrail(live, sessionRow, `<button class="icon-btn" data-act="trail-start" title="New session on this trail">${ICON.play}</button>`)
+    || empty(restorable.length ? 'None yet. Resume the ones from before, above.' : 'None open.'));
+
+  // Hidden while empty.
+  const fill = (id, rows) => {
+    $(`#${id}-card`).hidden = !rows.length;
+    $(`#${id}-n`).textContent = rows.length || '';
+    patchList($(`#${id}`), rows.join(''));
+  };
+  fill('ov-elsewhere', (S.elsewhere || []).map(elsewhereRow));
+  fill('ov-pickup', pickup.map(pickupRow));
+  fill('ov-coming', coming.map(upcomingRow));
+  fill('ov-runs', running.map(runRow));
+  fill('ov-idle', idle.map(idleRow));
+  $('#ov-idle-card .card-actions').hidden = idle.length < 2;
+
+  $('#ov-todos-n').textContent = open.length || '';
   patchList($('#ov-todos'), open.map(todoRow).join('') || empty('Nothing open.'));
 }
 
@@ -1456,6 +1623,19 @@ function confirmModal({ title, body, confirm, danger = false }) {
   });
 }
 
+// Resumes closed sessions without opening them ("Resume all", the Overview's Resume buttons).
+// The first failure is flashed.
+async function resumeHere(list) {
+  const results = await Promise.allSettled(list.map(s => {
+    if (terms.has(s.id)) resetTerm(s.id);
+    return api.invoke('session:create', { resumeId: s.id, title: s.title, cwd: s.cwd });
+  }));
+  for (const s of list) if (terms.has(s.id)) loadBuffer(s.id);
+  const failed = results.find(r => r.status === 'rejected');
+  if (failed) flashError(failed.reason);
+  return { started: results.filter(r => r.status === 'fulfilled').length, failed: Boolean(failed) };
+}
+
 async function resumeSession(id, title, cwd) {
   if (terms.has(id)) resetTerm(id);
   try { await api.invoke('session:create', { resumeId: id, title, cwd }); } catch (err) { flashError(err); return false; }
@@ -1567,16 +1747,33 @@ document.addEventListener('click', async e => {
       }
       case 'mark-unread': return api.invoke('session:markRead', S.view.id, false);
       case 'restore-all': {
-        const toResume = S.data.sessions.filter(s => !s.live && s.restorable);
-        const results = await Promise.allSettled(toResume.map(s => {
-          if (terms.has(s.id)) resetTerm(s.id);
-          return api.invoke('session:create', { resumeId: s.id, title: s.title, cwd: s.cwd });
-        }));
-        const failed = results.find(r => r.status === 'rejected');
-        if (failed) flashError(failed.reason);
-        for (const s of toResume) if (terms.has(s.id)) loadBuffer(s.id);
+        const { started, failed } = await resumeHere(S.data.sessions.filter(s => !s.live && s.restorable));
+        // One that didn't start stays on the list, to try again.
+        if (failed) return undefined;
         await api.invoke('session:clearRestorable');
-        return flash(`Resumed ${toResume.length} session${toResume.length === 1 ? '' : 's'}`);
+        return flash(`Resumed ${plural(started, 'session')}`);
+      }
+      case 'resume-row': {
+        const s = session(id);
+        if (!s || s.live) return undefined;
+        const { failed } = await resumeHere([s]);
+        return failed ? undefined : flash(`Resumed “${s.title || 'Untitled session'}”`, { type: 'session', id: s.id }, { ms: 2500 });
+      }
+      case 'close-idle': {
+        const s = session(id);
+        if (!s?.live) return undefined;
+        await api.invoke('session:kill', id);
+        return flash(`Closed “${s.title || 'Untitled session'}”. It’s under Closed, to resume.`, { type: 'session', id }, { ms: 3000 });
+      }
+      case 'close-idle-all': {
+        const list = S.data.sessions.filter(idleForADay);
+        await Promise.all(list.map(s => api.invoke('session:kill', s.id)));
+        return flash(`Closed ${plural(list.length, 'session')}. ${list.length === 1 ? 'It’s' : 'They’re'} under Closed, to resume.`);
+      }
+      case 'elsewhere-open': return openElsewhere(id);
+      case 'resume-trail': {
+        const { started, failed } = await resumeHere(S.data.sessions.filter(s => !s.live && s.restorable && s.trailId === id));
+        return failed ? undefined : flash(`Resumed ${plural(started, 'session')} on “${trail(id)?.title || 'the trail'}”`, { type: 'trail', id });
       }
       case 'restore-dismiss': return api.invoke('session:clearRestorable');
       case 'clear-closed': {
@@ -1671,6 +1868,7 @@ document.addEventListener('click', async e => {
       if (S.selected.has(id)) S.selected.delete(id); else S.selected.add(id);
       return renderSidebar();
     }
+    if (kind === 'elsewhere') return openElsewhere(id);
     if (kind === 'recent') {
       const r = S.recent.find(x => x.id === id);
       const fresh = Date.now() - new Date(r.lastActivityAt).getTime() < 5 * 60 * 1000;
@@ -2062,6 +2260,8 @@ function fitSoon() {
 }
 new ResizeObserver(fitSoon).observe($('#terminals'));
 setInterval(() => { renderSidebar(); if (sectionOpen('recent')) refreshRecent(); }, 60 * 1000);
+// The Overview's clock-bound cards (coming up, idle for a day) and what runs elsewhere.
+setInterval(() => { if (S.view.type === 'home' && !document.hidden) refreshElsewhere(); }, 20 * 1000);
 
 // ---------- banner: Claude Code missing, update available ----------
 function renderBanner() {

@@ -9,7 +9,7 @@ const INVOKE = new Set([
   'workflow:add', 'workflow:update', 'workflow:delete', 'workflow:start', 'workflow:prepare', 'workflow:dismiss',
   'workflow:render', 'workflow:fromSession', 'workflow:fromRun',
   'trail:add', 'trail:update', 'trail:delete', 'trail:suggestion', 'trail:condense', 'session:setTrail',
-  'recent:list', 'dialog:pickDir', 'open:external', 'config:set', 'app:checkUpdates', 'app:applyUpdate', 'app:whatsNew',
+  'recent:list', 'elsewhere:list', 'dialog:pickDir', 'open:external', 'config:set', 'app:checkUpdates', 'app:applyUpdate', 'app:whatsNew',
   'remote:get', 'remote:pair', 'remote:cancelPair', 'remote:forget', 'remote:testPush',
 ]);
 const SEND = new Set(['session:write', 'session:resize', 'session:interrupt', 'ui:focus']);
