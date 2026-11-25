@@ -5,7 +5,7 @@ self.addEventListener('install', () => self.skipWaiting());
 self.addEventListener('activate', e => e.waitUntil(self.clients.claim()));
 
 // Where a notification leads: only the screens the app has, never an address from the message.
-const hashOf = view => (view && ['run', 'session', 'workflow'].includes(view.type) && /^[\w-]+$/.test(String(view.id)) ? `#/${view.type}/${view.id}` : '#/');
+const hashOf = view => (view && ['run', 'session', 'workflow', 'todo'].includes(view.type) && /^[\w-]+$/.test(String(view.id)) ? `#/${view.type}/${view.id}` : '#/');
 
 self.addEventListener('push', e => {
   let m = {};
