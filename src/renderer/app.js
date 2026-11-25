@@ -415,15 +415,22 @@ function trailWork(tr) {
   return r ? { type: 'run', id: r.id } : null;
 }
 
+// "Go to …" for where a trail's work is now (trailWork): its session that most needs you, or a run.
+function workLabel(work) {
+  const item = work.type === 'session' ? session(work.id) : run(work.id);
+  return `Go to ${work.type === 'session' ? '' : 'its background run '}“${(item?.title || 'Untitled session').slice(0, 60)}”`;
+}
+
 function trailRow(tr) {
   const isActive = S.view.type === 'trail' && S.view.id === tr.id;
+  const work = tr.status === 'archived' ? null : trailWork(tr);
   const n = (tr.suggestions?.length || 0) + (tr.condense?.status === 'ready' ? 1 : 0);
   const badge = n ? `<span class="sugg-badge" title="${plural(n, 'suggestion')} for the notes">${ICON.note}${n}</span>` : '';
   return `<li class="row ${isActive ? 'active' : ''} ${tr.status === 'archived' ? 'dim' : ''}" data-kind="trail" data-id="${esc(tr.id)}" title="${esc(shortDir(tr.cwd || ''))}">
     ${dotHtml(trailDot(tr))}
     <div class="main"><div class="title-line"><span class="title">${hl(tr.title)}</span>${badge}</div>
     ${snippet([tr.title], tr.notes, shortDir(tr.cwd)) || `<div class="sub">${esc(trailSub(tr))}</div>`}</div>
-    <span class="row-actions"><button class="icon-btn" data-act="trail-start" title="New session on this trail">${ICON.play}</button></span>
+    <span class="row-actions">${work ? `<button class="icon-btn" data-act="trail-goto" title="${esc(workLabel(work))}">${workIcon(work)}</button>` : ''}<button class="icon-btn" data-act="trail-start" title="New session on this trail">${ICON.play}</button></span>
   </li>`;
 }
 
@@ -756,7 +763,25 @@ async function ensureKnown(view) {
   return !!find(view.id);
 }
 
+// A header that doesn't fit its column (beside the journey it's narrow) shows its buttons as
+// icons, with their words as tooltips; still too tight, it drops the folder and chips. Checked
+// after every render and when the column changes width.
+function fitHeader() {
+  const h = $('#view-header');
+  h.classList.remove('compact', 'tight');
+  const cramped = () => {
+    const t = h.querySelector('.h-title');
+    return h.scrollWidth > h.clientWidth + 1 || Boolean(t && t.scrollWidth > t.clientWidth + 1 && t.clientWidth < 140);
+  };
+  if (!cramped()) return;
+  for (const b of h.querySelectorAll('.btn')) if (!b.title) b.title = b.textContent.trim();
+  h.classList.add('compact');
+  if (cramped()) h.classList.add('tight');
+}
+new ResizeObserver(() => fitHeader()).observe($('#view-header'));
+
 function renderMain() {
+  requestAnimationFrame(fitHeader);
   const v = S.view;
   const find = { session, run, todo, workflow, trail }[v.type];
   if (find && !find(v.id)) {
@@ -1698,6 +1723,10 @@ document.addEventListener('click', async e => {
       case 'todo-start-dismiss': return api.invoke('todo:setStart', S.view.id, { dismissMissed: true });
       case 'session-trail': return trailPickModal(S.view.id);
       case 'trail-start': return startModal([], { trailId: id });
+      case 'trail-goto': {
+        const work = trail(id) && trailWork(trail(id));
+        return work ? navigate(work) : undefined;
+      }
       case 'trail-start-current': return startModal([], { trailId: S.view.id });
       case 'trail-goto-work': {
         const work = trail(S.view.id) && trailWork(trail(S.view.id));
@@ -1939,7 +1968,9 @@ document.addEventListener('contextmenu', e => {
 function trailMenu(e, id) {
   const tr = trail(id);
   if (!tr) return;
+  const work = trailWork(tr);
   showMenu(e, [
+    ...(work ? [[`${workIcon(work)}${esc(workLabel(work))}`, () => navigate(work)]] : []),
     [`${ICON.play}New session`, () => startModal([], { trailId: id })],
     [tr.status === 'archived' ? `${ICON.resume}Unarchive` : `${ICON.archive}Archive`, () => api.invoke('trail:update', id, { status: tr.status === 'archived' ? 'active' : 'archived' })],
   ]);

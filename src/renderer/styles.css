@@ -102,7 +102,7 @@ body.resizing #terminals { pointer-events: none; }
 .journey-tip-status.idle { color: #8cc2ff; }
 .journey-tip-status.bg { color: #c6a8ff; }
 #dock-trail { padding: 14px 14px 30px; }
-.dock-trail { display: grid; gap: 14px; }
+.dock-trail { display: grid; grid-template-columns: minmax(0, 1fr); gap: 14px; }
 .dock-trail-head { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .dock-trail-head b { font-size: 13.5px; font-weight: 650; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
 .dock-trail-head .spacer { flex: 1; }
@@ -225,6 +225,12 @@ details[open] > summary::before { transform: rotate(90deg); }
 #view-header .h-path { display: inline-flex; align-items: center; gap: 5px; }
 #view-header .h-path svg { width: 13px; height: 13px; }
 #view-header .spacer { flex: 1; }
+/* A header that doesn't fit (beside the journey the column is narrow): buttons become icons, their
+   words a tooltip (fitHeader in app.js); still too tight, the folder and chips go too. */
+#view-header .h-path { flex-shrink: 50; } /* the folder gives way before the title does */
+#view-header.compact .btn { font-size: 0; gap: 0; padding: 5px 8px; flex: none; }
+#view-header.compact .btn kbd { display: none; }
+#view-header.tight .h-path, #view-header.tight .chip { display: none; }
 #view-header .check { width: 18px; height: 18px; }
 .chip { display: inline-flex; align-items: center; gap: 5px; font-size: 11.5px; padding: 1px 8px; border-radius: 10px; background: var(--bg-raised); border: 1px solid var(--line); color: var(--text-2); white-space: nowrap; cursor: pointer; max-width: 240px; overflow: hidden; text-overflow: ellipsis; }
 .chip svg { width: 12px; height: 12px; }
@@ -307,7 +313,9 @@ details[open] > summary::before { transform: rotate(90deg); }
 .list .group:hover .row-actions { display: flex; }
 
 /* to-do view */
-.todo-view { max-width: 860px; display: grid; gap: 18px; }
+/* Single-column grids are pinned to their width (minmax(0, 1fr)): otherwise one long line, a
+   session's preview or a tool step, widens the whole view past a narrow column. */
+.todo-view { max-width: 860px; display: grid; grid-template-columns: minmax(0, 1fr); gap: 18px; }
 .field label, .field .label { display: block; color: var(--text-3); font-size: 10.5px; font-weight: 650; text-transform: uppercase; letter-spacing: 0.7px; margin-bottom: 6px; }
 .field input[type=text], .field input[type=datetime-local], .field textarea { width: 100%; background: var(--bg-input); border: 1px solid var(--line); border-radius: var(--radius); padding: 8px 11px; outline: none; transition: border-color 0.12s, box-shadow 0.12s; }
 .field textarea { min-height: 150px; resize: vertical; font-family: var(--font); line-height: 1.5; }
@@ -315,7 +323,7 @@ details[open] > summary::before { transform: rotate(90deg); }
 .field input[type=datetime-local] { color-scheme: dark; }
 .inline { display: flex; gap: 8px; align-items: center; }
 .inline input { flex: 1; }
-.links .list { padding: 0; display: grid; gap: 6px; }
+.links .list { padding: 0; display: grid; grid-template-columns: minmax(0, 1fr); gap: 6px; }
 .links .row { background: var(--bg-side); border: 1px solid var(--line-soft); }
 .links .row.active::before { display: none; }
 
@@ -324,7 +332,7 @@ details[open] > summary::before { transform: rotate(90deg); }
 .run-prompt-wrap { margin-bottom: 14px; }
 .run-prompt-wrap > summary { padding: 4px 0; }
 .run-prompt { background: var(--bg-side); border: 1px solid var(--line-soft); border-radius: var(--radius); padding: 10px 12px; white-space: pre-wrap; color: var(--text-2); font-size: 12.5px; margin-top: 6px; }
-.events { display: grid; gap: 6px; margin-bottom: 18px; }
+.events { display: grid; grid-template-columns: minmax(0, 1fr); gap: 6px; margin-bottom: 18px; }
 .ev-text { white-space: pre-wrap; color: var(--text-2); }
 .ev-tool { font-family: var(--mono); font-size: 11.5px; color: var(--text-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding-left: 10px; border-left: 2px solid var(--line); }
 .ev-tool b { color: var(--blue); font-weight: 500; }
@@ -394,8 +402,8 @@ details[open] > summary::before { transform: rotate(90deg); }
 #flash.error { border-color: rgba(248, 81, 73, 0.45); background: #2a1515; color: #ffd0cc; }
 #flash.error svg { color: var(--red); width: 16px; height: 16px; }
 
-.settings-view { max-width: 760px; display: grid; gap: 18px; }
-.set-group { background: var(--bg-side); border: 1px solid var(--line-soft); border-radius: 12px; padding: 16px 18px; display: grid; gap: 14px; }
+.settings-view { max-width: 760px; display: grid; grid-template-columns: minmax(0, 1fr); gap: 18px; }
+.set-group { background: var(--bg-side); border: 1px solid var(--line-soft); border-radius: 12px; padding: 16px 18px; display: grid; grid-template-columns: minmax(0, 1fr); gap: 14px; }
 .set-group h3 { margin: 0; font-size: 13px; font-weight: 650; }
 .help { margin: 6px 0 0; color: var(--text-3); font-size: 12px; line-height: 1.5; word-break: break-all; }
 .warn { color: #ff8a83; }
@@ -413,12 +421,12 @@ details[open] > summary::before { transform: rotate(90deg); }
 .toggle small { color: var(--text-3); font-size: 12px; line-height: 1.45; }
 
 /* background-run approvals */
-.approval { background: linear-gradient(180deg, #2a2312, #1d1a12); border: 1px solid rgba(227, 160, 8, 0.45); border-radius: 12px; padding: 14px 16px; margin-bottom: 16px; display: grid; gap: 10px; }
+.approval { background: linear-gradient(180deg, #2a2312, #1d1a12); border: 1px solid rgba(227, 160, 8, 0.45); border-radius: 12px; padding: 14px 16px; margin-bottom: 16px; display: grid; grid-template-columns: minmax(0, 1fr); gap: 10px; }
 .ap-head { display: flex; align-items: center; gap: 8px; }
 .ap-head svg { color: var(--amber); width: 16px; height: 16px; }
 .ap-head .h-meta { color: var(--text-3); font-size: 12px; }
 .ap-detail { margin: 0; font-family: var(--mono); font-size: 12px; background: rgba(0, 0, 0, 0.3); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; white-space: pre-wrap; word-break: break-all; max-height: 220px; overflow: auto; color: var(--text); }
-.ap-rule { display: grid; gap: 5px; font-size: 12px; color: var(--text-2); }
+.ap-rule { display: grid; grid-template-columns: minmax(0, 1fr); gap: 5px; font-size: 12px; color: var(--text-2); }
 .ap-rule input { background: var(--bg-input); border: 1px solid var(--line); border-radius: 7px; padding: 6px 10px; font-family: var(--mono); font-size: 12px; outline: none; }
 .ap-rule input:focus { border-color: var(--accent); }
 .approval .actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
@@ -461,9 +469,9 @@ section.drop-after { box-shadow: inset 0 -2px 0 var(--accent); }
 .inline select { flex: 1; }
 /* .help breaks anywhere for long paths; sentences wrap at words. */
 .todo-view .help, .modal .help { word-break: normal; overflow-wrap: anywhere; }
-.suggestions { background: linear-gradient(180deg, #282115, #1c1914); border: 1px solid rgba(217, 162, 107, 0.45); border-radius: 12px; padding: 14px 16px; display: grid; gap: 12px; }
+.suggestions { background: linear-gradient(180deg, #282115, #1c1914); border: 1px solid rgba(217, 162, 107, 0.45); border-radius: 12px; padding: 14px 16px; display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; }
 .suggestions .ap-head svg { color: var(--accent); }
-.sugg { display: grid; gap: 6px; }
+.sugg { display: grid; grid-template-columns: minmax(0, 1fr); gap: 6px; }
 .sugg textarea { width: 100%; background: var(--bg-input); border: 1px solid var(--line); border-radius: var(--radius); padding: 7px 10px; outline: none; resize: vertical; font: inherit; line-height: 1.5; color: var(--text); }
 .sugg textarea:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
 .sugg-foot { display: flex; align-items: center; gap: 6px; }

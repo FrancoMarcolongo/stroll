@@ -2,6 +2,12 @@
 
 Stroll shows the new sections here once, after an update. **Settings › Updates › What's new** shows them all again.
 
+## 0.17.1 — 2026-11-25
+
+### Beside the journey, and from the menu
+- **Nothing is cut off beside the journey any more.** In the narrow column next to the map, a trail's page (and a to-do's, a run's or Settings) fits: long lines end in "…" instead of widening the page. When a header doesn't fit, its buttons become icons (hover one for its name), and if it's still tight the folder steps aside.
+- **Go straight to a trail's session from the menu.** Hover a trail with someone out for a button that opens the session that most needs you (or its background run). Right-click the trail for the same.
+
 ## 0.17.0 — 2026-11-25
 
 ### The journey
