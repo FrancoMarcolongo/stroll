@@ -2,6 +2,20 @@
 
 Stroll shows the new sections here once, after an update. **Settings › Updates › What's new** shows them all again.
 
+## 0.20.0 — 2026-11-26
+
+### Carry a walker
+- **Pick a session's walker up and drop it on another trail's camp** to move the session to that trail, or on the base camp to take it off its trail. **Drop it on any tent to end the session,** once you say so. While you carry it, a card by the pointer says what dropping it there would do; Escape puts it back.
+- **Dropped anywhere else, it makes for the nearest path** and goes on from there to its camp, or wherever its work is. Leave it in the woods and it has a word for you once it's out of the trees.
+
+### The hub's spots
+- **Hover a spot in the hub** (the map board, the rock, the campfire, the gate, the pond or the deck) for its name and what someone there is doing.
+
+### To-dos on the phone
+- **Tap a to-do on the phone to open it:** change its title, notes, folder and trail, mark it done or reopen it, and **Start** a session for it with the trail, the folder and a first message filled in. A to-do set to start on its own keeps its folder and trail; change those on the computer.
+
+Nothing to install on the phone: the app loads the new version the next time it's opened.
+
 ## 0.19.0 — 2026-11-25
 
 ### Paths like streams

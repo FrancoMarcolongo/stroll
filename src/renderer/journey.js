@@ -1,7 +1,11 @@
 // The journey: every live session is a walker, and where they stand says what they're doing.
 // In the middle is the hub, where the work happens; close around it, a clearing in the woods for
 // each trail, its camp, there even with nobody out (and the base camp for sessions on no trail).
-// A click on a camp's tent starts a new session on that trail. Each clearing's
+// A click on a camp's tent starts a new session on that trail. A session's walker can be picked
+// up: dropped on another trail's camp, the session moves to that trail; on any tent, it ends
+// (once you say so). Dropped anywhere else, it makes for the nearest path and goes on from there,
+// grumbling if you left it in the woods.
+// Each clearing's
 // winding path comes into the hub from off to one side, so the trails' paths cross one another.
 // Walkers live in their trail's clearing and walk to the hub to work, the shortest way along the
 // paths:
@@ -41,6 +45,8 @@
   const MAP_FONT = '"Pixelify Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
   if (document.fonts) for (const weight of [500, 600]) document.fonts.load(`${weight} 12px "Pixelify Sans"`).catch(() => {});
   const MIN_DWELL = 3000; // ms at a work spot before walking to the next, so it doesn't dart about
+  const ENDING_MS = 8000; // dropped on a tent: how long it stays in there for the session to end
+  const GRAWLIX = ['@!¬', '#@!', '%&@!', '¬#@%!', '@#*!'];
   const LINGER = 3 * 60 * 1000; // how long someone who's finished stays in the hub once seen
   const HEAD_H = 22; // the strip: a head and shoulders per person
 
@@ -104,6 +110,16 @@
   }
   const SPOT_OF = { waiting: 'gate', read: 'board', write: 'rock', run: 'fire', bg: 'pond', think: 'ring', agent: 'ring', done: 'lounge', linger: 'lounge', rest: 'rest', start: 'start', drop: 'drop' };
   const HUB_SPOTS = new Set(['gate', 'board', 'rock', 'fire', 'pond', 'lounge', 'ring']);
+  // What each spot in the hub stands for, said when the pointer is over it: its name, what someone
+  // there is doing, and the dot that goes with it.
+  const PLACE = {
+    board: ['Map board', 'Reading and searching', 'working'],
+    rock: ['Rock', 'Editing', 'working'],
+    fire: ['Campfire', 'Running commands', 'working'],
+    gate: ['Gate', 'Needs you', 'waiting'],
+    pond: ['Pond', 'Something running in the background', 'bg'],
+    lounge: ['Deck', 'Finished: your turn', 'idle'],
+  };
   const WORK = new Set(['ring', 'board', 'rock', 'fire']);
 
   // ---------- sprites: rows of letters, a letter per art pixel ----------
@@ -308,6 +324,8 @@
         pond: [[px - 12, py - pry - 1, 'down', 1], [px, py - pry - 2, 'down', 1], [px + 11, py - pry - 1, 'down', 1], [px - prx - 5, py + 2, 'right', 1]],
       },
       focus: { board: [21, top + 20], rock: [196, top + 18], fire: [fx, fy], lounge: [lx, ly], gate: [22, gs + 22], pond: [px, py] },
+      // Where the pointer over a spot tells what it's for: [x, y, w, h] (the pond: its own outline).
+      areas: { board: [0, top + 2, 42, 40], rock: [176, top + 4, 42, 30], fire: [fx - 20, fy - 14, 40, 28], lounge: [lx - 34, ly - 14, 68, 26], gate: [2, gs + 8, 42, 26] },
       // What nobody stands on: [x, y, w, h].
       solid: [[2, top + 8, 38, 30], [178, top + 6, 37, 24], [fx - 8, fy - 5, 17, 11], [lx - 29, ly - 1, 58, 5], [2, gs + 12, 40, 18]],
       entries: { top: [60, 160], bottom: [62, 158] }, // where paths from above and below may join the loop
@@ -1224,7 +1242,7 @@
     };
   }
 
-  function create(host, { mode = 'map', onOpen = () => {}, onCamp = () => {} } = {}) {
+  function create(host, { mode = 'map', onOpen = () => {}, onCamp = () => {}, onMove = () => {}, onEnd = () => {} } = {}) {
     const canvas = document.createElement('canvas');
     canvas.className = 'journey-canvas';
     const tip = document.createElement('div');
@@ -1251,6 +1269,10 @@
     const homeOf = p => p.trailId || 'camp';
     let camps = []; // the trails, each with its camp: [{ key, title, order }]
     let hoverCamp = null; // the clearing whose tent is under the pointer
+    // A walker picked up: { w, from, dx, dy, target } while it's carried, where it was picked up
+    // from, the pointer's offset from its feet, and what dropping it now would do.
+    let drag = null;
+    const ended = new Map(); // session id → when it was dropped on a tent: it stays in until it's gone
     // The clearings there should be: a trail's while it has live sessions, then the base camp.
     function clearingList() {
       const seen = new Map();
@@ -1470,15 +1492,19 @@
       const ids = new Set(people.map(p => p.id));
       for (const [id, w] of [...walkers]) {
         if (ids.has(id)) continue;
+        if (drag?.w === w) putBack();
+        w.asking = false;
         // A session that's ended goes back into its tent; a wanderer whose run you've opened, into
         // the woods.
         if (world && !w.unplaced && clearing(w.home)) { if (!w.leaving) leave(w, now); } else walkers.delete(id);
       }
       for (const id of [...bags.keys()]) if (!ids.has(id)) bags.delete(id);
+      for (const [id, at] of [...ended]) if (!ids.has(id) || now - at > ENDING_MS) ended.delete(id);
       for (const p of people) {
         if (p.kind === 'run' && p.run !== 'running') { finished(p, now); continue; }
         const want = SPOT_OF[poseOf(p)] || 'rest';
         let w = walkers.get(p.id);
+        if (!w && ended.has(p.id)) continue; // dropped on a tent and gone in: it's ending
         if (!w) {
           const run = p.kind === 'run';
           w = { id: p.id, run, look: run ? wandererLooks(p.id) : looksOf(p.id), home: homeOf(p), spot: want, legs: [], pending: null, p };
@@ -1491,14 +1517,17 @@
         }
         if (w.leaving) {
           // Resumed on the way to the tent: about turn.
-          if (w.run || p.kind === 'run') continue;
+          if (w.run || p.kind === 'run' || ended.has(p.id)) continue;
           Object.assign(w, { leaving: false, p });
           go(w, want, now);
           continue;
         }
         w.p = p;
+        if (w.held || w.asking) continue; // carried, or waiting by a tent: seen to when it's put down
         if (!world || w.unplaced) { w.spot = want; w.home = homeOf(p); continue; }
-        if (w.home !== homeOf(p)) {
+        // Dropped on another camp: there already, while the move gets saved.
+        if (w.moving && (homeOf(p) === w.moving.key || now > w.moving.until)) w.moving = null;
+        if (!w.moving && w.home !== homeOf(p)) {
           w.home = homeOf(p);
           if (!clearing(w.home)) { w.spot = want; w.unplaced = true; continue; } // a new clearing: the map is laid out anew
           go(w, want, now);
@@ -1520,7 +1549,7 @@
     function chatter(now, list) {
       const groups = new Map();
       for (const w of list) {
-        if (w.unplaced || w.legs.length || w.leaving || !w.p?.say || now - (w.arrived || 0) < 1500) continue;
+        if (w.unplaced || w.held || w.asking || w.legs.length || w.leaving || !w.p?.say || now - (w.arrived || 0) < 1500) continue;
         if (!w.spot || ['ring', 'rest', 'drop', 'out'].includes(w.spot)) continue;
         const key = `${w.spot}|${areaOf(w, w.spot)}`;
         if (!groups.has(key)) groups.set(key, []);
@@ -1545,7 +1574,7 @@
       if (now - synced > 4000) { synced = now; sync(now); }
       const list = [...walkers.values()];
       for (const w of list) {
-        if (w.unplaced || w.pause > now) continue;
+        if (w.unplaced || w.pause > now || w.held) continue;
         if (w.leaving && !w.legs.length) { walkers.delete(w.id); continue; } // into the tent, or the woods
         if (w.run && !w.legs.length) {
           if (w.spot === 'drop' && !bags.has(w.id)) dropBag(w, now);
@@ -1566,6 +1595,10 @@
           while (w.legs.length && !w.legs[0].pts.length) { if (w.legs[0].node != null) w.node = w.legs[0].node; w.legs.shift(); }
           const last = w.trail[0];
           if (!last || Math.hypot(last[0] - w.x, last[1] - w.y) >= 1) { w.trail.unshift([w.x, w.y]); if (w.trail.length > 90) w.trail.pop(); }
+          if (w.lost && ground(w.x, w.y) !== GROUND.FOREST) {
+            // Out of the trees it was left in: it stops, turns to you and says what it thinks.
+            Object.assign(w, { lost: false, pause: now + 1700, dir: 'down', grumble: { to: now + 1700, text: GRAWLIX[Math.floor(Math.random() * GRAWLIX.length)] } });
+          }
           if (!w.legs.length) { w.arrived = now; if (!w.leaving) w.woods = null; } // out among the others
           continue;
         }
@@ -1576,10 +1609,10 @@
       // Walkers who cross on the way stop and say hello (once in a while, not every time).
       for (let i = 0; i < list.length; i += 1) {
         const a = list[i];
-        if (!a.legs?.length || a.pause > now || a.unplaced || a.leaving) continue;
+        if (!a.legs?.length || a.pause > now || a.unplaced || a.leaving || a.held) continue;
         for (let j = i + 1; j < list.length; j += 1) {
           const b = list[j];
-          if (!b.legs?.length || b.pause > now || b.unplaced || b.leaving) continue;
+          if (!b.legs?.length || b.pause > now || b.unplaced || b.leaving || b.held) continue;
           if (Math.abs(a.x - b.x) > 9 || Math.abs(a.y - b.y) > 7) continue;
           const key = a.id < b.id ? `${a.id}|${b.id}` : `${b.id}|${a.id}`;
           if (now - (met.get(key) || 0) < 45000) continue;
@@ -1630,6 +1663,7 @@
       if (key !== worldKey) {
         // Dragging a border lays the map out many times a second: not more than ~6.
         if (world && now - builtAt < 160) { dirty = true; return true; }
+        if (drag) putBack();
         world = buildWorld(geo.aw, geo.ah, list);
         worldKey = key;
         builtAt = now;
@@ -1662,15 +1696,21 @@
         const c = world.clearings.find(cl => cl.key === hoverCamp);
         if (c) bubble(c.tent.x + Math.round(c.tent.w / 2), c.tent.y - 3, '#d9a26b', 'plus');
       }
-      // Walkers and their pets, back to front.
+      if (drag?.target?.kind === 'move') ring(drag.target.c, now);
+      // Walkers and their pets, back to front; one being carried, over everything.
       const items = [];
       for (const w of walkers.values()) {
         if (w.unplaced) continue;
-        items.push({ y: w.y, draw: () => walker(w, now, t) });
+        if (!w.held) items.push({ y: w.y, draw: () => walker(w, now, t) }); // their pets wait for them
         for (const pet of pets(w, now)) items.push({ y: pet.y, draw: () => drawPet(pet) });
       }
       for (const b of bags.values()) items.push({ y: b.y, draw: () => drawBag(b, now) });
       items.sort((a, b) => a.y - b.y).forEach(it => it.draw());
+      if (drag) {
+        walker(drag.w, now, t);
+        const c = drag.target?.kind === 'end' && drag.target.c;
+        if (c) bubble(c.tent.x + Math.round(c.tent.w / 2), c.tent.y - 3, '#d9775b', 'z');
+      }
       leaves(now);
       butterflies(now, sky);
       clouds(now, sky);
@@ -1818,20 +1858,22 @@
     function walker(w, now, t) {
       const f = t + w.look.phase;
       const moving = w.legs.length > 0 && !(w.pause > now);
-      const dir = (moving || w.pause > now ? w.dir : w.facing) || 'down';
-      const legs = moving ? (Math.floor(now / 170) % 2 ? 'a' : 'b') : w.sit && !w.legs.length ? 'sit' : 'stand';
-      const spot = w.legs.length ? null : w.spot;
+      // Carried: lifted off the ground, facing you, legs kicking.
+      const dir = w.held ? 'down' : (moving || w.pause > now ? w.dir : w.facing) || 'down';
+      const legs = w.held ? (Math.floor(now / 110) % 2 ? 'a' : 'b') : moving ? (Math.floor(now / 170) % 2 ? 'a' : 'b') : w.sit && !w.legs.length ? 'sit' : 'stand';
+      const spot = w.legs.length || w.held || w.asking ? null : w.spot;
       const shut = spot === 'rest' || (!moving && f % 40 < 2);
       const img = w.run ? wandererSprite(w.id, w.look, dir, legs, shut) : walkerSprite(w.id, w.look, dir, legs, shut);
       const fx = Math.round(w.x);
       const fy = Math.round(w.y);
       const x0 = fx - (w.run ? W_FOOT_X : FOOT_X);
       const breathe = !moving && legs === 'stand' && f % 32 < 3 ? 1 : 0;
-      const y0 = fy - (w.run ? W_FOOT_Y : FOOT_Y) + (moving && legs === 'a' ? -1 : 0) + (legs === 'sit' ? 1 : 0) + breathe;
+      const y0 = fy - (w.run ? W_FOOT_Y : FOOT_Y) + (moving && legs === 'a' ? -1 : 0) + (legs === 'sit' ? 1 : 0) + breathe - (w.held ? 4 : 0);
       const top = y0 + (w.run ? W_LIFT : 0); // where a walker's head would start: what's drawn on them goes from here
       w.box = [x0, y0, img.width, img.height];
       // Coming out of the woods, or going back in: faint among the trees.
-      const fade = w.woods ? Math.min(1, Math.hypot(w.x - w.woods[0], w.y - w.woods[1]) / (w.fadeLen || 14)) : 1;
+      // Left in the woods: dim among the trees.
+      const fade = Math.min(w.lost ? 0.6 : 1, w.woods ? Math.min(1, Math.hypot(w.x - w.woods[0], w.y - w.woods[1]) / (w.fadeLen || 14)) : 1);
       if (fade < 1) g.globalAlpha = Math.max(0.05, fade);
       R(fx - 4, fy - 1, 9, 2, 'rgba(0,0,0,0.25)');
       if (w.p?.current && !w.leaving) { R(fx - 6, fy - 1, 13, 1, '#d9a26b'); R(fx - 5, fy + 1, 11, 1, '#d9a26b'); R(fx - 7, fy, 1, 1, '#d9a26b'); R(fx + 7, fy, 1, 1, '#d9a26b'); }
@@ -1968,6 +2010,18 @@
       hi: ['10001', '10000', '11101', '10101', '10101'],
       plus: ['00100', '00100', '11111', '00100', '00100'],
     };
+    // Where a carried walker would go: a dotted ring round the clearing, its dots creeping round.
+    function ring(c, now) {
+      const rx = c.rx + 3;
+      const ry = c.ry + 3;
+      const n = Math.max(24, Math.round((rx + ry) * 1.6));
+      const turn = Math.floor(now / 160);
+      for (let i = 0; i < n; i += 1) {
+        if ((i + turn) % 4 > 1) continue;
+        const a = (i / n) * 2 * Math.PI;
+        R(c.cx + Math.cos(a) * rx, c.cy + Math.sin(a) * ry, 1, 1, '#f6e7c8');
+      }
+    }
     function glyph(rows, x, y, color) { rows.forEach((r, j) => [...r].forEach((c, i) => { if (c === '1') R(x + i, y + j, 1, 1, color); })); }
     function bubble(cx, bottom, color, kind) {
       const rows = GLYPH[kind];
@@ -1998,6 +2052,7 @@
       for (const w of walkers.values()) {
         // Said where they stand: someone who has set off since says nothing more.
         if (w.chat && w.box && !w.unplaced && now >= w.chat.from && now < w.chat.to && (!w.legs.length || w.hello > now)) speech(w, w.chat.text);
+        else if (w.grumble && w.box && now < w.grumble.to) speech(w, w.grumble.text);
       }
       if (!people.length) {
         ctx.font = `500 12px ${MAP_FONT}`;
@@ -2020,7 +2075,7 @@
       const hx = (w.box[0] + w.box[2] / 2) * css;
       const cx = Math.min(Math.max(hx, tw / 2 + 4), geo.W - tw / 2 - 4);
       // Over their head; under their feet when the one they're talking to stands above them.
-      const other = walkers.get(w.chat.with);
+      const other = w.chat && walkers.get(w.chat.with);
       const below = (other && other.y < w.y - 3) || w.box[1] * css < 28;
       // Over the ! at the gate and the tick on the deck, not on them.
       const marked = !w.legs.length && (w.spot === 'gate' || (w.spot === 'lounge' && w.p && poseOf(w.p) === 'done'));
@@ -2119,7 +2174,7 @@
     function loop() {
       const now = performance.now();
       safely(() => draw(now));
-      const moving = mode === 'map' && [...walkers.values()].some(w => w.legs?.length && !(w.pause > now));
+      const moving = mode === 'map' && (drag || [...walkers.values()].some(w => w.legs?.length && !(w.pause > now)));
       timer = setTimeout(loop, moving ? 33 : 125);
     }
     // Back on screen after a while away: everyone is already where they were going.
@@ -2141,6 +2196,7 @@
     function stop() { if (timer) hiddenAt = performance.now(); clearTimeout(timer); timer = 0; }
 
     // --- pointer: who's under it, a card about them, a click opens them ---
+    const tentBox = c => [c.tent.x - 2, c.tent.y - 4, c.tent.w + 4, c.tent.h + 6];
     function at(e) {
       if (!geo) return null;
       const r = canvas.getBoundingClientRect();
@@ -2159,40 +2215,215 @@
       const left = bag && people.find(q => q.id === bag.p?.id);
       if (left) return left;
       // A camp's tent starts a new session on its trail.
-      const c = world?.clearings.find(cl => inside([cl.tent.x - 2, cl.tent.y - 4, cl.tent.w + 4, cl.tent.h + 6]));
-      return c ? { kind: 'camp', id: `camp:${c.key}`, key: c.key, title: c.title, dot: 'none', status: c.key === 'camp' ? 'Click for a new session, on no trail' : 'Click for a new session on this trail' } : null;
+      const c = world?.clearings.find(cl => inside(tentBox(cl)));
+      if (c) return { kind: 'camp', id: `camp:${c.key}`, key: c.key, title: c.title, dot: 'none', status: c.key === 'camp' ? 'Click for a new session, on no trail' : 'Click for a new session on this trail' };
+      // A spot in the hub says what someone there is doing.
+      if (!world) return null;
+      const { hx, hy, hub } = world;
+      const [px, py, prx, pry] = hub.pond;
+      const spot = Object.keys(PLACE).find(k => (k === 'pond'
+        ? ((ax - hx - px) / (prx + 3)) ** 2 + ((ay - hy - py) / (pry + 3)) ** 2 <= 1
+        : inside([hx + hub.areas[k][0], hy + hub.areas[k][1], hub.areas[k][2], hub.areas[k][3]])));
+      return spot ? { kind: 'place', id: `place:${spot}`, title: PLACE[spot][0], status: PLACE[spot][1], dot: PLACE[spot][2] } : null;
     }
     // The strip has those at work, wanderers included, but not the bags.
     const stripPeople = () => people.filter(p => p.kind !== 'run' || p.run === 'running');
-    canvas.addEventListener('mousemove', e => {
-      const p = at(e);
-      canvas.style.cursor = p ? 'pointer' : '';
-      hoverCamp = p?.kind === 'camp' ? p.key : null;
-      // The strip is too narrow for a card: it gets the system's tooltip instead.
-      if (mode === 'strip') { canvas.title = p ? `${p.title || (p.kind === 'run' ? 'Background run' : 'Untitled session')} · ${p.status}${p.preview ? `\n${p.preview}` : ''}` : ''; return; }
-      if (!p) { tip.hidden = true; hover = null; return; }
-      if (hover !== p.id) {
-        hover = p.id;
+    const hideTip = () => { tip.hidden = true; hover = null; };
+    // A card by the pointer: a name, what's going on (coloured like its dot) and maybe a line more.
+    function card(e, key, title, status, dot, more) {
+      if (hover !== key) {
+        hover = key;
         tip.innerHTML = '';
-        const title = document.createElement('b');
-        title.textContent = p.title || (p.kind === 'run' ? 'Background run' : 'Untitled session');
+        const b = document.createElement('b');
+        b.textContent = title;
         const what = document.createElement('span');
-        what.className = `journey-tip-status ${p.dot}`;
-        what.textContent = p.status;
-        tip.append(title, what);
-        if (p.preview) { const line = document.createElement('span'); line.textContent = p.preview; tip.append(line); }
+        what.className = `journey-tip-status ${dot}`;
+        what.textContent = status;
+        tip.append(b, what);
+        if (more) { const line = document.createElement('span'); line.textContent = more; tip.append(line); }
         tip.hidden = false;
       }
       const hr = host.getBoundingClientRect();
       const left = Math.min(e.clientX - hr.left + 14, host.clientWidth - tip.offsetWidth - 6);
       tip.style.left = `${Math.max(6, left)}px`;
       tip.style.top = `${Math.min(e.clientY - hr.top + 16, host.clientHeight - tip.offsetHeight - 6)}px`;
-    });
-    canvas.addEventListener('mouseleave', () => { tip.hidden = true; hover = null; hoverCamp = null; });
-    canvas.addEventListener('click', e => {
+    }
+    function hoverAt(e) {
       const p = at(e);
-      if (!p) return;
-      tip.hidden = true; hover = null; hoverCamp = null;
+      canvas.style.cursor = p && p.kind !== 'place' ? 'pointer' : '';
+      hoverCamp = p?.kind === 'camp' ? p.key : null;
+      // The strip is too narrow for a card: it gets the system's tooltip instead.
+      if (mode === 'strip') { canvas.title = p ? `${p.title || (p.kind === 'run' ? 'Background run' : 'Untitled session')} · ${p.status}${p.preview ? `\n${p.preview}` : ''}` : ''; return; }
+      if (!p) { hideTip(); return; }
+      card(e, p.id, p.title || (p.kind === 'run' ? 'Background run' : 'Untitled session'), p.status, p.dot, p.preview);
+    }
+
+    // --- carrying a walker: a session's walker picked up and dropped on another trail's camp
+    // moves the session to that trail; dropped on any tent, the session ends. Anywhere else, it's
+    // put back where it was. ---
+    let press = null; // the button down on a session's walker, until the pointer has moved enough to carry it
+    let dropped = false; // the click that comes with a drop isn't one
+    let frame = 0;
+    const artAt = e => { const r = canvas.getBoundingClientRect(); return [(e.clientX - r.left) / geo.css, (e.clientY - r.top) / geo.css]; };
+    const within = ([x, y, w, h], ax, ay) => ax >= x && ax < x + w && ay >= y && ay < y + h;
+    function dropTarget(w, ax, ay) {
+      const tent = world.clearings.find(c => within(tentBox(c), ax, ay));
+      if (tent) return { kind: 'end', c: tent };
+      const c = world.clearings.find(cl => ((ax - cl.cx) / (cl.rx + 3)) ** 2 + ((ay - cl.cy) / (cl.ry + 3)) ** 2 <= 1
+        || within([cl.sign.x - 2, cl.sign.y - 2, cl.sign.w + 4, cl.sign.h + 4], ax, ay));
+      // A trail archived since keeps its clearing while someone's on it, but takes nobody new.
+      if (c && c.key !== w.home && (c.key === 'camp' || camps.some(x => x.key === c.key))) return { kind: 'move', c };
+      return null;
+    }
+    // What dropping it here would do, said by the pointer.
+    function dropCard(e) {
+      const { w, target } = drag;
+      if (!target) { hideTip(); return; }
+      const name = `“${w.p?.title || 'Untitled session'}”`;
+      if (target.kind === 'end') card(e, `drop:end:${target.c.key}`, 'End session', `Drop to end ${name}. It goes under Closed, to resume.`, 'none');
+      else if (target.c.key === 'camp') card(e, 'drop:camp', `Take it off “${clearing(w.home)?.title || 'its trail'}”`, `Drop to bring ${name} to the base camp, on no trail.`, 'none');
+      else card(e, `drop:${target.c.key}`, `Move to “${target.c.title}”`, `Drop to move ${name} to this trail. It gets the trail’s notes the next time it starts or resumes.`, 'none');
+    }
+    function pickUp(e) {
+      const { w, ax, ay } = press;
+      press = null;
+      if (walkers.get(w.id) !== w || w.leaving || w.unplaced) return;
+      drag = { w, from: { x: w.x, y: w.y, sit: w.sit }, dx: w.x - ax, dy: w.y - ay, target: null };
+      Object.assign(w, { held: true, sit: false, chat: null });
+      hoverCamp = null;
+      hideTip();
+      canvas.style.cursor = 'grabbing';
+      try { canvas.setPointerCapture(e.pointerId); } catch { /* the pointer's gone already */ }
+      carry(e);
+    }
+    function carry(e) {
+      const [ax, ay] = artAt(e);
+      const { w } = drag;
+      w.x = Math.max(4, Math.min(world.aw - 4, ax + drag.dx));
+      w.y = Math.max(FOOT_Y + 6, Math.min(world.ah - 2, ay + drag.dy));
+      drag.target = dropTarget(w, ax, ay);
+      dropCard(e);
+      // Drawn with the pointer, not on the next tick.
+      if (!frame) frame = requestAnimationFrame(() => { frame = 0; if (timer) safely(() => draw(performance.now())); });
+    }
+    function letGo() {
+      const { w } = drag;
+      drag = null;
+      w.held = false;
+      canvas.style.cursor = '';
+      hideTip();
+      synced = 0; // what changed while it was carried, seen to on the next tick
+      return w;
+    }
+    // Escape, or the map laid out anew: back where it was.
+    function putBack() {
+      const { from } = drag;
+      Object.assign(letGo(), { x: from.x, y: from.y, sit: from.sit });
+      dirty = true;
+    }
+    function drop() {
+      const { target } = drag;
+      const w = letGo();
+      const now = performance.now();
+      if (target?.kind === 'end') { askToEnd(w, target.c); return; }
+      if (target?.kind === 'move') {
+        w.home = target.c.key;
+        w.moving = { key: target.c.key, until: now + 5000 };
+        onMove(w.id, target.c.key === 'camp' ? null : target.c.key);
+      }
+      land(w, now);
+    }
+    // Dropped on a tent: it waits at the door while you're asked, then goes in, or on its way.
+    function askToEnd(w, c) {
+      const { inside, out } = doorOf(c);
+      Object.assign(w, { asking: true, legs: [{ pts: [out], node: null }], goal: out, facing: 'up', sit: false, node: c.exit, pending: null, speed: 20, arrived: 0 });
+      Promise.resolve(onEnd(w.id)).catch(() => false).then(yes => {
+        if (!w.asking) return; // the session ended meanwhile: it's gone in already
+        w.asking = false;
+        synced = 0;
+        if (walkers.get(w.id) !== w || w.held) return;
+        const now = performance.now();
+        if (!yes) { land(w, now); return; }
+        Object.assign(w, { legs: [{ pts: [out, inside], node: null }], goal: inside, woods: inside, fadeLen: 5, spot: 'out', slot: null, leaving: true, pending: null, arrived: 0, speed: 20 });
+        ended.set(w.id, now);
+      });
+    }
+    const ground = (x, y) => {
+      x = Math.round(x); y = Math.round(y);
+      return x < 0 || y < 0 || x >= world.aw || y >= world.ah ? GROUND.FOREST : world.kind[y * world.aw + x];
+    };
+    // Put down somewhere: in its own clearing with somewhere to be there, straight there; otherwise
+    // straight to the nearest bit of path, along it whichever way is shorter, and on from there to
+    // where it's going. Left in the woods, it grumbles once it's out of the trees.
+    function land(w, now) {
+      const spot = w.spot;
+      Object.assign(w, { legs: [], pending: null, chat: null, sit: false, lost: ground(w.x, w.y) === GROUND.FOREST });
+      const c = clearing(w.home);
+      if (c && !HUB_SPOTS.has(spot) && spot !== 'ring' && ((w.x - c.cx) / c.rx) ** 2 + ((w.y - c.cy) / c.ry) ** 2 <= 1) {
+        w.slot = slotFor(w, spot);
+        const [tx, ty, facing, sit, aside, node] = placeFor(w, spot, w.slot);
+        Object.assign(w, { legs: [{ pts: [[tx, ty]], node: null }], goal: [tx, ty], facing, sit: !!sit, aside: !!aside, node, speed: 26, arrived: 0 });
+        return;
+      }
+      // The nearest point on any path, and the way along it to either end.
+      let best = null;
+      world.net.adj.forEach((edges, a) => edges.forEach(e => {
+        for (let k = 0; k < e.pts.length - 1; k += 1) {
+          const [ax, ay] = e.pts[k];
+          const [bx, by] = e.pts[k + 1];
+          const vx = bx - ax; const vy = by - ay;
+          const f = Math.max(0, Math.min(1, ((w.x - ax) * vx + (w.y - ay) * vy) / (vx * vx + vy * vy || 1)));
+          const d = Math.hypot(ax + vx * f - w.x, ay + vy * f - w.y);
+          if (!best || d < best.d) best = { d, a, e, k, at: [ax + vx * f, ay + vy * f] };
+        }
+      }));
+      if (!best) { go(w, spot, now); return; }
+      const { a, e, k, at: P } = best;
+      const ends = [
+        { node: a, pts: [P, ...e.pts.slice(0, k + 1).reverse()] },
+        { node: e.to, pts: [P, ...e.pts.slice(k + 1)] },
+      ];
+      const len = pts => pts.reduce((sum, p, i) => sum + (i ? Math.hypot(p[0] - pts[i - 1][0], p[1] - pts[i - 1][1]) : 0), 0);
+      const to = spot === 'ring' ? null : placeFor(w, spot, slotFor(w, spot))[5];
+      const via = n => (to == null ? 0 : shortest(world.net, n, to).reduce((sum, x) => sum + x.len, 0));
+      const pick = ends.map(x => ({ ...x, cost: len(x.pts) + via(x.node) })).sort((p, q) => p.cost - q.cost)[0];
+      w.legs = [{ pts: pick.pts, node: pick.node }];
+      go(w, spot, now);
+    }
+    const onKey = e => { if (drag && e.key === 'Escape') { e.stopPropagation(); putBack(); } };
+    window.addEventListener('keydown', onKey, true);
+
+    canvas.addEventListener('pointerdown', e => {
+      dropped = false;
+      press = null;
+      if (mode !== 'map' || e.button !== 0 || !geo || !world || drag) return;
+      const p = at(e);
+      const w = p && !p.kind ? walkers.get(p.id) : null; // a session's walker, not a wanderer or a bag
+      if (!w || w.leaving || w.unplaced) return;
+      const [ax, ay] = artAt(e);
+      press = { w, x: e.clientX, y: e.clientY, ax, ay };
+    });
+    canvas.addEventListener('pointermove', e => {
+      if (drag) { carry(e); return; }
+      if (press && !(e.buttons & 1)) press = null; // let go outside the window
+      if (press && Math.hypot(e.clientX - press.x, e.clientY - press.y) >= 5) { pickUp(e); return; }
+      hoverAt(e);
+    });
+    canvas.addEventListener('pointerup', () => {
+      press = null;
+      if (!drag) return;
+      dropped = true;
+      drop();
+    });
+    canvas.addEventListener('pointercancel', () => { press = null; if (drag) putBack(); });
+    canvas.addEventListener('lostpointercapture', () => { if (drag) putBack(); });
+    canvas.addEventListener('mouseleave', () => { if (drag) return; hideTip(); hoverCamp = null; });
+    canvas.addEventListener('click', e => {
+      if (dropped) { dropped = false; return; }
+      const p = at(e);
+      if (!p || p.kind === 'place') return;
+      hideTip();
+      hoverCamp = null;
       if (p.kind === 'camp') onCamp(p.key === 'camp' ? null : p.key); else onOpen(p.id, p.kind || 'session');
     });
 
@@ -2218,12 +2449,12 @@
         people = list;
         if (mode === 'map') safely(() => sync(performance.now()));
         dirty = true;
-        if (hover && !list.some(p => p.id === hover)) { tip.hidden = true; hover = null; }
+        if (hover && !drag && !list.some(p => p.id === hover)) { tip.hidden = true; hover = null; }
         if (host.offsetParent) { start(); safely(() => draw(performance.now())); }
       },
       // The panel was shown or hidden: animate only while it's on screen.
-      visible(on) { if (on) { dirty = true; start(); } else { tip.hidden = true; hover = null; stop(); } },
-      destroy() { stop(); observer.disconnect(); canvas.remove(); tip.remove(); },
+      visible(on) { if (on) { dirty = true; start(); } else { if (drag) putBack(); press = null; tip.hidden = true; hover = null; stop(); } },
+      destroy() { stop(); observer.disconnect(); window.removeEventListener('keydown', onKey, true); canvas.remove(); tip.remove(); },
     };
   }
 

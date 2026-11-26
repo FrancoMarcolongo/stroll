@@ -1373,10 +1373,24 @@ function greeting() {
 }
 
 // ---------- modals ----------
-function modal(html, onMount) {
+// onGone: called once the modal goes, however it goes (closed, a click outside it, or another
+// modal in its place).
+let modalGone = null;
+function modal(html, onMount, onGone) {
   const root = $('#modal-root');
+  const before = modalGone;
+  modalGone = null;
+  before?.();
   root.innerHTML = `<div class="backdrop"><div class="modal">${html}</div></div>`;
-  const close = () => { MdEditor.close(); root.innerHTML = ''; if (S.view.type === 'session') terms.get(S.view.id)?.term.focus(); };
+  modalGone = onGone || null;
+  const close = () => {
+    MdEditor.close();
+    root.innerHTML = '';
+    const gone = modalGone;
+    modalGone = null;
+    gone?.();
+    if (S.view.type === 'session') terms.get(S.view.id)?.term.focus();
+  };
   root.querySelector('.backdrop').addEventListener('mousedown', e => { if (e.target.classList.contains('backdrop')) close(); });
   onMount(root.querySelector('.modal'), close);
 }
@@ -1639,15 +1653,17 @@ function setTodoDone(id, done) {
   return undefined;
 }
 
+// Resolves true for the confirm button, false however else it goes (Cancel, Escape, a click
+// outside it).
 function confirmModal({ title, body, confirm, danger = false }) {
   return new Promise(resolve => {
     modal(`<h2>${esc(title)}</h2>${body ? `<div class="sub">${esc(body)}</div>` : ''}
       <footer><button class="btn ghost" data-close>Cancel</button><button class="btn ${danger ? 'danger' : 'primary'}" data-ok>${esc(confirm)}</button></footer>`, (m, close) => {
-      m.querySelector('[data-ok]').addEventListener('click', () => { close(); resolve(true); });
-      m.querySelector('[data-close]').addEventListener('click', () => { close(); resolve(false); });
-      m.addEventListener('keydown', e => { if (e.key === 'Escape') { close(); resolve(false); } });
+      m.querySelector('[data-ok]').addEventListener('click', () => { resolve(true); close(); });
+      m.querySelector('[data-close]').addEventListener('click', () => close());
+      m.addEventListener('keydown', e => { if (e.key === 'Escape') close(); });
       m.querySelector('[data-ok]').focus();
-    });
+    }, () => resolve(false));
   });
 }
 
@@ -2983,6 +2999,32 @@ function journeySessions(here) {
     });
 }
 
+async function journeyMove(id, trailId) {
+  const s = session(id);
+  if (!s) return;
+  const from = trail(s.trailId);
+  try {
+    await api.invoke('session:setTrail', id, trailId);
+    const name = `“${s.title || 'Untitled session'}”`;
+    flash(trailId ? `Moved ${name} to “${trail(trailId)?.title || 'the trail'}”` : `Took ${name} off “${from?.title || 'its trail'}”`, trailId ? { type: 'trail', id: trailId } : null);
+  } catch (e) { flash(`Couldn’t move it: ${e.message || e}`, null, { error: true }); }
+}
+// A walker dropped on a tent: asked first. The answer goes back to the journey before the session
+// is ended, so the walker goes into the tent it was dropped at.
+async function journeyEnd(id) {
+  const s = session(id);
+  if (!s?.live) return false;
+  const name = `“${s.title || 'Untitled session'}”`;
+  const busy = sessionDot(s) === 'working';
+  const ok = await confirmModal({ title: `End ${name}?`, body: `${busy ? 'It’s in the middle of a turn; ending it stops that. ' : ''}It goes under Closed, to resume.`, confirm: 'End session', danger: true });
+  if (!ok || !session(id)?.live) return false;
+  api.invoke('session:kill', id).then(
+    () => flash(`Ended ${name}. It’s under Closed, to resume.`, { type: 'session', id }, { ms: 3000 }),
+    e => flash(`Couldn’t end it: ${e.message || e}`, null, { error: true }),
+  );
+  return true;
+}
+
 function renderDock() {
   if (!S.data || !window.Journey) return;
   const side = $('#app').dataset.side;
@@ -2992,8 +3034,9 @@ function renderDock() {
   $('#dock-journey').hidden = tab !== 'journey';
   $('#dock-trail').hidden = tab !== 'trail';
   const open = (id, kind) => navigate({ type: kind === 'run' ? 'run' : 'session', id });
-  // A click on a camp's tent: a new session on its trail (the base camp's: on none).
-  if (!journeyView) journeyView = Journey.create($('#dock-journey'), { onOpen: open, onCamp: trailId => startModal([], { trailId }) });
+  // A click on a camp's tent: a new session on its trail (the base camp's: on none). A walker
+  // dropped on another trail's camp moves its session there; on any tent, ends it.
+  if (!journeyView) journeyView = Journey.create($('#dock-journey'), { onOpen: open, onCamp: trailId => startModal([], { trailId }), onMove: journeyMove, onEnd: journeyEnd });
   if (!stripView) stripView = Journey.create($('#dock-strip-people'), { mode: 'strip', onOpen: open });
   const people = journeyPeople();
   journeyView.update(people, activeTrails().map(t => ({ key: t.id, title: t.title, order: t.order ?? 0 })));
